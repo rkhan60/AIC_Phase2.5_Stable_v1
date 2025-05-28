@@ -1,0 +1,51 @@
+{
+    "financial": {
+        "revenue": "1000000",
+        "costs": "800000",
+        "profit_margins": "20%",
+        "growth_rate": "15%"
+    },
+    "operational": {
+        "employees": 100,
+        "locations": ["HQ", "Branch 1", "Branch 2"],
+        "capacity_utilization": "75%"
+    },
+    "market": {
+        "market_share": "15%",
+        "competitors": [
+            {
+                "name": "Competitor 1",
+                "market_share": "25%"
+            },
+            {
+                "name": "Competitor 2",
+                "market_share": "20%"
+            }
+        ],
+        "target_segments": ["Segment A", "Segment B", "Segment C"]
+    },
+    "strategic": {
+        "current_initiatives": [
+            {
+                "name": "Digital Transformation",
+                "status": "In Progress",
+                "completion": "60%"
+            },
+            {
+                "name": "Market Expansion",
+                "status": "Planning",
+                "completion": "20%"
+            }
+        ],
+        "challenges": [
+            "Increasing competition",
+            "Technology adoption",
+            "Talent retention"
+        ],
+        "objectives": [
+            "Increase market share by 10%",
+            "Improve operational efficiency",
+            "Launch new product line"
+        ]
+    }
+} 
