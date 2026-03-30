@@ -46,6 +46,13 @@ class AgentCapability(Enum):
     SUSTAINABILITY_ASSESSMENT = "sustainability_assessment"
     CHANGE_MANAGEMENT = "change_management"
     BUSINESS_DEVELOPMENT = "business_development"
+    # Analytics agent capabilities
+    DATA_ANALYSIS = "data_analysis"
+    VISUALIZATION = "visualization"
+    CUSTOMER_MODELING = "customer_modeling"
+    PREDICTIVE_ANALYTICS = "predictive_analytics"
+    BI_DEVELOPMENT = "bi_development"
+    DATA_PIPELINE = "data_pipeline"
 
 class ModelType(Enum):
     """Types of models that can be used by agents"""
