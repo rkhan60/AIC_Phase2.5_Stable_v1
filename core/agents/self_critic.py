@@ -7,6 +7,22 @@ from ..memory.memory_query import MemoryQueryEngine
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class CritiquePoint:
+    """A single observation/suggestion produced by the self-critic."""
+    aspect: str
+    observation: str
+    improvement: str
+
+
+@dataclass
+class CritiqueResult:
+    """High-level result returned by analyze() and analyze_reasoning()."""
+    overall_score: float
+    summary: str
+    points: List[CritiquePoint] = field(default_factory=list)
+
 class CritiqueType(Enum):
     CLARITY = "clarity"        # Clarity of reasoning
     CONSISTENCY = "consistency"  # Internal consistency
@@ -394,8 +410,113 @@ class SelfCritic:
         """Get critique history for target"""
         if not target_id:
             return self.critique_history
-            
+
         return [
             critique for critique in self.critique_history
             if critique['target_id'] == target_id
-        ] 
+        ]
+
+    # ------------------------------------------------------------------
+    # Pipeline-facing API (used by AutonomousPipeline)
+    # ------------------------------------------------------------------
+
+    def analyze(self, validation_result: Any) -> CritiqueResult:
+        """Analyse a ValidationResult and return a CritiqueResult.
+
+        Args:
+            validation_result: A ValidationResult from ReasoningValidator.
+
+        Returns:
+            CritiqueResult with score, summary and improvement points.
+        """
+        flaws = getattr(validation_result, 'flaws', [])
+        confidence = getattr(validation_result, 'confidence_score', 0.75)
+        is_valid = getattr(validation_result, 'is_valid', False)
+
+        points: List[CritiquePoint] = []
+        for flaw in flaws:
+            points.append(CritiquePoint(
+                aspect="Validation",
+                observation=flaw,
+                improvement="Address the identified flaw before proceeding"
+            ))
+
+        overall_score = min(1.0, confidence + (0.1 if is_valid else 0.0))
+        summary = (
+            f"Validation {'passed' if is_valid else 'failed'} with confidence "
+            f"{confidence:.2f}. Found {len(flaws)} flaw(s)."
+        )
+
+        return CritiqueResult(
+            overall_score=round(overall_score, 4),
+            summary=summary,
+            points=points,
+        )
+
+    def analyze_reasoning(
+        self, reasoning_chain: Any, validation_result: Any
+    ) -> CritiqueResult:
+        """Analyse a ReasoningChain together with its ValidationResult.
+
+        Args:
+            reasoning_chain: A ReasoningChain from ThoughtProcessor.
+            validation_result: The corresponding ValidationResult.
+
+        Returns:
+            CritiqueResult combining reasoning quality and validation findings.
+        """
+        steps = getattr(reasoning_chain, 'steps', [])
+        overall_confidence = getattr(reasoning_chain, 'overall_confidence', 0.75)
+        flaws = getattr(validation_result, 'flaws', [])
+
+        # Build a trace compatible with evaluate_reasoning
+        trace = [
+            {
+                'rationale': s.description,
+                'context': s.metadata,
+                'analysis': s.evidence,
+                'confidence': s.confidence,
+            }
+            for s in steps
+        ]
+
+        points: List[CritiquePoint] = []
+
+        if trace:
+            try:
+                critique = self.evaluate_reasoning(
+                    trace,
+                    {'validation_status': getattr(validation_result, 'status', 'unknown')}
+                )
+                for i, finding in enumerate(critique.findings):
+                    suggestion = (
+                        critique.suggestions[i]
+                        if i < len(critique.suggestions)
+                        else "Review and improve"
+                    )
+                    points.append(CritiquePoint(
+                        aspect="Reasoning Quality",
+                        observation=finding,
+                        improvement=suggestion,
+                    ))
+            except Exception as exc:
+                logger.warning("evaluate_reasoning raised: %s", exc)
+
+        for flaw in flaws:
+            points.append(CritiquePoint(
+                aspect="Validation Flaw",
+                observation=flaw,
+                improvement="Strengthen this aspect of the reasoning chain",
+            ))
+
+        summary = (
+            f"Reasoning chain: {len(steps)} step(s), "
+            f"confidence {overall_confidence:.2f}. "
+            f"{len(points)} improvement area(s) identified."
+        )
+
+        return CritiqueResult(
+            overall_score=round(overall_confidence, 4),
+            summary=summary,
+            points=points,
+        )

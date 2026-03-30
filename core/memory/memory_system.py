@@ -205,7 +205,30 @@ class MemorySystem:
 
         return ""
 
-    def retrieve_memory(self, 
+    def store_episode(self, episode: Dict[str, Any]) -> bool:
+        """Store a complete reasoning-cycle episode in long-term memory.
+
+        Args:
+            episode: Dict containing cycle inputs, outputs, and metadata.
+
+        Returns:
+            True on success, False on failure.
+        """
+        try:
+            validation_status = str(episode.get("validation", "unknown"))
+            self.add_memory(
+                content=episode,
+                memory_type=MemoryType.LONG_TERM,
+                emotional_tags=[EmotionalTag.IMPORTANT],
+                context_tags=["episode", validation_status],
+                metadata={"stored_at": datetime.now().isoformat()},
+            )
+            return True
+        except Exception as exc:
+            print(f"Failed to store episode: {exc}")
+            return False
+
+    def retrieve_memory(self,
                        memory_id: str = None,
                        context_tags: List[str] = None,
                        emotional_tags: List[EmotionalTag] = None) -> List[MemoryItem]:

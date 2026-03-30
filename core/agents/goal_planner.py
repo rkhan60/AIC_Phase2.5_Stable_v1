@@ -59,6 +59,15 @@ class Goal:
     created_at: datetime = field(default_factory=datetime.now)
     modified_at: datetime = field(default_factory=datetime.now)
 
+@dataclass
+class GoalHierarchy:
+    """Hierarchical structure of a main goal and its decomposed subgoals."""
+    main_goal: Goal
+    subgoals: List[Goal] = field(default_factory=list)
+    depth: int = 1
+    created_at: datetime = field(default_factory=datetime.now)
+
+
 class GoalPlanner:
     """Agent for translating input into structured goals"""
     def __init__(self, memory_query: MemoryQueryEngine):
@@ -261,4 +270,22 @@ class GoalPlanner:
         """Get complete reasoning trace for goal"""
         if goal_id not in self.goals:
             return []
-        return self.goals[goal_id].reasoning_trace 
+        return self.goals[goal_id].reasoning_trace
+
+    def plan_goal(self, goal_input: str, context: Dict[str, Any]) -> GoalHierarchy:
+        """Create a GoalHierarchy from a free-text goal description.
+
+        Args:
+            goal_input: Natural language description of the goal.
+            context: Execution context (domain, constraints, etc.).
+
+        Returns:
+            GoalHierarchy with a main goal and zero or more subgoals.
+        """
+        main_goal = self.create_goal(goal_input, context)
+        subgoals = self.decompose_goal(main_goal.id)
+        return GoalHierarchy(
+            main_goal=main_goal,
+            subgoals=subgoals,
+            depth=2 if subgoals else 1,
+        )
