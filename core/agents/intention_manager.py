@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Optional, Set
 from datetime import datetime, timedelta
 from enum import Enum
 import logging
+import uuid
 from .goal_planner import Goal, GoalStatus, GoalType
 from ..memory.memory_query import MemoryQueryEngine
 
@@ -195,11 +196,8 @@ class IntentionManager:
         intention.execution_trace.append(reasoning)
         
     def _generate_intention_id(self, goal: Goal) -> str:
-        """Generate unique intention ID"""
-        import hashlib
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        hash_input = f"{timestamp}_{goal.id}"
-        return f"intention_{hashlib.md5(hash_input.encode()).hexdigest()[:8]}"
+        """Generate a collision-resistant unique intention ID using UUID4."""
+        return f"intention_{uuid.uuid4().hex[:12]}"
         
     def _evaluate_intention_metrics(self,
                                   goal: Goal,

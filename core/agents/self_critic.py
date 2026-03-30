@@ -3,7 +3,9 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
 import logging
+import uuid
 from ..memory.memory_query import MemoryQueryEngine
+from ..config import config
 
 logger = logging.getLogger(__name__)
 
@@ -154,11 +156,8 @@ class SelfCritic:
         return critique
         
     def _generate_critique_id(self, trace: List[Dict[str, Any]]) -> str:
-        """Generate unique critique ID"""
-        import hashlib
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        trace_hash = hashlib.md5(str(trace).encode()).hexdigest()[:8]
-        return f"critique_{timestamp}_{trace_hash}"
+        """Generate a collision-resistant unique critique ID using UUID4."""
+        return f"critique_{uuid.uuid4().hex[:12]}"
         
     def _evaluate_critique_metrics(self,
                                  reasoning_trace: List[Dict[str, Any]],
@@ -219,40 +218,72 @@ class SelfCritic:
         return sum(1 for f in factors if f) / len(factors)
         
     def _evaluate_consistency(self, trace: List[Dict[str, Any]]) -> float:
-        """Evaluate reasoning consistency"""
+        """Score internal consistency — checks rationale presence and step uniqueness."""
         if not trace:
             return 0.0
-            
-        # Check for contradictions in reasoning
-        return 0.8  # Placeholder implementation
-        
+
+        rationale_present = sum(1 for step in trace if step.get('rationale'))
+        rationale_score = rationale_present / len(trace)
+
+        # Duplicate rationale strings indicate redundant/contradicting steps
+        rationales = [str(step.get('rationale', '')) for step in trace]
+        unique_count = len(set(rationales))
+        duplicate_ratio = 1.0 - (unique_count / max(len(rationales), 1))
+
+        score = max(0.0, rationale_score - duplicate_ratio * 0.3)
+        return round(score, 4)
+
     def _evaluate_completeness(self, trace: List[Dict[str, Any]]) -> float:
-        """Evaluate reasoning completeness"""
+        """Score how completely each step is filled in."""
         if not trace:
             return 0.0
-            
+
         required_fields = ['timestamp', 'action', 'rationale']
         completeness = sum(
-            all(field in step for field in required_fields)
+            all(f in step for f in required_fields)
             for step in trace
         )
-        return completeness / len(trace)
-        
+        return round(completeness / len(trace), 4)
+
     def _evaluate_efficiency(self, trace: List[Dict[str, Any]]) -> float:
-        """Evaluate reasoning efficiency"""
+        """Score reasoning efficiency — penalise redundant steps and extreme lengths."""
         if not trace:
             return 0.0
-            
-        # Analyze reasoning steps for redundancy
-        return 0.7  # Placeholder implementation
-        
+
+        cfg = config.critique
+        contents = [str(step.get('rationale', step.get('description', ''))) for step in trace]
+        unique_count = len(set(contents))
+        uniqueness = unique_count / len(trace)
+
+        n = len(trace)
+        if cfg.ideal_trace_min_steps <= n <= cfg.ideal_trace_max_steps:
+            length_score = 1.0
+        elif n < cfg.ideal_trace_min_steps:
+            length_score = n / cfg.ideal_trace_min_steps
+        else:
+            excess = n - cfg.ideal_trace_max_steps
+            length_score = max(0.5, 1.0 - excess * cfg.length_penalty_per_extra_step)
+
+        return round(min(1.0, (uniqueness + length_score) / 2), 4)
+
     def _evaluate_effectiveness(self, trace: List[Dict[str, Any]]) -> float:
-        """Evaluate reasoning effectiveness"""
+        """Score whether the reasoning chain reaches a meaningful conclusion."""
         if not trace:
             return 0.0
-            
-        # Analyze outcome achievement
-        return 0.75  # Placeholder implementation
+
+        cfg = config.critique
+        conclusion_keywords = ('conclude', 'synthes', 'recommend', 'therefore', 'result')
+        has_conclusion = any(
+            step.get('metadata', {}).get('step_type') == 'conclusion'
+            or any(kw in str(step.get('rationale', '')).lower() for kw in conclusion_keywords)
+            for step in trace
+        )
+
+        confidences = [float(step.get('confidence', 0.5)) for step in trace]
+        avg_confidence = sum(confidences) / len(confidences)
+
+        bonus = cfg.conclusion_bonus if has_conclusion else 0.0
+        return round(min(1.0, avg_confidence + bonus), 4)
         
     def _evaluate_action_clarity(self, trace: List[Dict[str, Any]]) -> float:
         """Evaluate action clarity"""
@@ -267,12 +298,14 @@ class SelfCritic:
         return sum(1 for f in factors if f) / len(factors)
         
     def _evaluate_action_consistency(self, trace: List[Dict[str, Any]]) -> float:
-        """Evaluate action consistency"""
+        """Evaluate action sequence consistency."""
         if not trace:
             return 0.0
-            
-        # Check for action sequence consistency
-        return 0.85  # Placeholder implementation
+        actions = [str(step.get('action', '')) for step in trace]
+        unique_actions = len(set(actions))
+        # A mix of action types (not all the same) indicates consistent progression
+        diversity = unique_actions / max(len(actions), 1)
+        return round(min(1.0, 0.5 + diversity * 0.5), 4)
         
     def _evaluate_action_completeness(self,
                                     trace: List[Dict[str, Any]],
@@ -289,22 +322,25 @@ class SelfCritic:
         return addressed_outcomes / len(expected_outcomes)
         
     def _evaluate_action_efficiency(self, trace: List[Dict[str, Any]]) -> float:
-        """Evaluate action efficiency"""
+        """Evaluate action efficiency — penalise duplicated actions."""
         if not trace:
             return 0.0
-            
-        # Analyze action sequence for redundancy
-        return 0.9  # Placeholder implementation
-        
+        actions = [str(step.get('action', '')) for step in trace]
+        unique_ratio = len(set(actions)) / max(len(actions), 1)
+        return round(min(1.0, 0.6 + unique_ratio * 0.4), 4)
+
     def _evaluate_action_effectiveness(self,
-                                     trace: List[Dict[str, Any]],
-                                     expected_outcomes: List[str]) -> float:
-        """Evaluate action effectiveness"""
+                                       trace: List[Dict[str, Any]],
+                                       expected_outcomes: List[str]) -> float:
+        """Score how many expected outcomes are addressed by the action trace."""
         if not trace or not expected_outcomes:
             return 0.0
-            
-        # Compare actual vs expected outcomes
-        return 0.8  # Placeholder implementation
+        trace_str = str(trace).lower()
+        addressed = sum(
+            1 for outcome in expected_outcomes
+            if any(word in trace_str for word in outcome.lower().split())
+        )
+        return round(addressed / len(expected_outcomes), 4)
         
     def _analyze_reasoning(self,
                          trace: List[Dict[str, Any]],
