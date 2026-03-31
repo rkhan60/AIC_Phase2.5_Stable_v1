@@ -1,84 +1,71 @@
+"""CLI launcher for the AIC consulting system."""
+from __future__ import annotations
+
 from pathlib import Path
-import os
-from ..engine.logic_engine import AICConsultingModel
-from ..data.data_processor import CompanyDataProcessor as DataProcessor
 
-def main():
-    print("🚀 Launching AI Consulting System")
-    print("----------------------------------------")
-    
-    # Initialize the system
-    model = AICConsultingModel()
-    processor = DataProcessor()
-    
-    # Get the data directory
-    data_dir = Path(__file__).parent.parent.parent / "data/raw"
-    if not data_dir.exists():
-        data_dir.mkdir(parents=True)
-        print("\n📁 Created 'data' directory for your files")
-        print("Please place your data files in the 'data/raw' directory")
-        return
 
-    # List available files
-    files = list(data_dir.glob("*.csv")) + list(data_dir.glob("*.xlsx")) + list(data_dir.glob("*.xls"))
-    
-    if not files:
-        print("\n❌ No data files found in the 'data/raw' directory")
-        print("Please add your data files and run again")
-        return
+def main() -> None:
+    print("AIC — AI Consulting System")
+    print("------------------------------------------")
 
-    print("\n📊 Available files:")
-    for i, file in enumerate(files, 1):
-        print(f"{i}. {file.name} ({file.stat().st_size / (1024*1024):.2f} MB)")
+    base = Path(__file__).parent.parent.parent
+    (base / "data").mkdir(parents=True, exist_ok=True)
+    (base / "memory").mkdir(exist_ok=True)
 
-    # Get user input for file selection
-    try:
-        choice = int(input("\nSelect a file to analyze (enter number): ")) - 1
-        if choice < 0 or choice >= len(files):
-            print("❌ Invalid selection")
-            return
-    except ValueError:
-        print("❌ Please enter a valid number")
-        return
+    from ..consulting_service import ConsultingService
 
-    selected_file = files[choice]
-    print(f"\n🔍 Analyzing {selected_file.name}...")
+    svc = ConsultingService(
+        memory_dir=str(base / "memory"),
+        db_path=str(base / "data" / "aic.db"),
+    )
 
-    try:
-        # Process the data
-        data = processor.load_data(selected_file)
-        processed_data = processor.process_data(data)
-        
-        # Run analysis
-        results = model.consulting_inference(
-            processed_data,
-            client_context={
-                'file_name': selected_file.name,
-                'data_size': len(processed_data)
-            }
-        )
-        
-        # Save results
-        output_dir = Path(__file__).parent.parent.parent / "output/reports"
-        output_dir.mkdir(exist_ok=True)
-        
-        report_file = output_dir / f"analysis_{selected_file.stem}.json"
-        processor.save_results(results, report_file)
-        print(f"\n✅ Generated analysis report: {report_file}")
+    print("\nDescribe your business problem (or 'quit' to exit).")
 
-        # Generate visualizations
-        viz_dir = Path(__file__).parent.parent.parent / "output/visualizations"
-        viz_dir.mkdir(exist_ok=True)
-        
-        viz_file = viz_dir / f"dashboard_{selected_file.stem}.html"
-        processor.generate_visualization(results, viz_file)
-        print(f"\n✅ Generated visualization: {viz_file}")
+    while True:
+        try:
+            problem = input("\n> ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nExiting.")
+            break
 
-    except Exception as e:
-        print(f"\n❌ Error during analysis: {str(e)}")
-        return
+        if not problem or problem.lower() in ("quit", "exit", "q"):
+            break
 
-    print("\n✨ Analysis complete! Check the output directory for results.")
+        print("\nOptional context (Enter to skip):")
+        industry = input("  Industry [general]: ").strip() or "general"
+        company_size = input("  Company size [sme]: ").strip() or "sme"
+        market_position = input("  Market position [challenger]: ").strip() or "challenger"
+
+        print("\nRunning analysis...")
+        try:
+            report = svc.analyze(problem, {
+                "industry": industry,
+                "company_size": company_size,
+                "market_position": market_position,
+            })
+        except Exception as exc:
+            print(f"\nError: {exc}")
+            continue
+
+        print("\n" + "=" * 60)
+        print(f"Session   : {report.session_id}")
+        print(f"Confidence: {report.confidence:.0%}  |  Validation: {report.validation_status}")
+        if report.past_sessions_used:
+            print(f"(informed by {report.past_sessions_used} similar past session(s))")
+        print("\n--- Reasoning ---")
+        print(report.reasoning_summary)
+        print("\n--- Critique ---")
+        print(report.critique_summary)
+        if report.recommended_frameworks:
+            print("\n--- Recommended Frameworks ---")
+            for fw in report.recommended_frameworks:
+                print(f"  * {fw}")
+        print("=" * 60)
+
+        again = input("\nRun another analysis? [y/N]: ").strip().lower()
+        if again != "y":
+            break
+
 
 if __name__ == "__main__":
-    main() 
+    main()

@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Optional, Set
 from datetime import datetime, timedelta
 from enum import Enum
 import logging
+import uuid
 from .goal_planner import Goal, GoalStatus, GoalType
 from ..memory.memory_query import MemoryQueryEngine
 
@@ -195,11 +196,8 @@ class IntentionManager:
         intention.execution_trace.append(reasoning)
         
     def _generate_intention_id(self, goal: Goal) -> str:
-        """Generate unique intention ID"""
-        import hashlib
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        hash_input = f"{timestamp}_{goal.id}"
-        return f"intention_{hashlib.md5(hash_input.encode()).hexdigest()[:8]}"
+        """Generate a collision-resistant unique intention ID using UUID4."""
+        return f"intention_{uuid.uuid4().hex[:12]}"
         
     def _evaluate_intention_metrics(self,
                                   goal: Goal,
@@ -304,4 +302,37 @@ class IntentionManager:
         """Get complete execution trace for intention"""
         if intention_id not in self.intentions:
             return []
-        return self.intentions[intention_id].execution_trace 
+        return self.intentions[intention_id].execution_trace
+
+    # ------------------------------------------------------------------
+    # Pipeline-facing API (used by AutonomousPipeline)
+    # ------------------------------------------------------------------
+
+    def process_goals(self, hierarchy: Any, context: Dict[str, Any]) -> Intention:
+        """Create and return the primary intention from a GoalHierarchy.
+
+        Args:
+            hierarchy: A GoalHierarchy whose main_goal drives the intention.
+            context: Execution context passed to create_intention().
+
+        Returns:
+            An active Intention for the main goal.
+        """
+        return self.create_intention(hierarchy.main_goal, context)
+
+    def select_intention(
+        self, goals: List[Goal], context: Dict[str, Any]
+    ) -> Optional[Intention]:
+        """Select the highest-priority goal from a list and create an intention.
+
+        Args:
+            goals: Candidate Goal objects to choose from.
+            context: Execution context passed to create_intention().
+
+        Returns:
+            An Intention for the best goal, or None if the list is empty.
+        """
+        if not goals:
+            return None
+        best_goal = max(goals, key=lambda g: g.metrics.get_priority_score())
+        return self.create_intention(best_goal, context)

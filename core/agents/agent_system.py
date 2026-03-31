@@ -69,16 +69,18 @@ class BaseAgent:
         while not self._stop_event.is_set():
             try:
                 if not self.task_queue.empty():
-                    self.status = AgentStatus.WORKING
+                    with self.lock:
+                        self.status = AgentStatus.WORKING
                     _, task = self.task_queue.get()
                     result = self.process_task(task)
                     with self.lock:
                         self.results[task.task_id] = result
+                        self.status = AgentStatus.IDLE
                     self.task_queue.task_done()
-                    self.status = AgentStatus.IDLE
             except Exception as e:
                 logging.error(f"Error in agent {self.agent_type}: {e}")
-                self.status = AgentStatus.ERROR
+                with self.lock:
+                    self.status = AgentStatus.ERROR
 
     def get_result(self, task_id: str) -> Optional[Any]:
         """Get task result"""

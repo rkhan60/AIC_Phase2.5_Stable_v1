@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
 import logging
+import uuid
 from ..memory.memory_query import MemoryQueryEngine
 
 logger = logging.getLogger(__name__)
@@ -134,11 +135,8 @@ class ReasoningScorer:
         return score
         
     def _generate_score_id(self, trace: List[Dict[str, Any]]) -> str:
-        """Generate unique score ID"""
-        import hashlib
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        trace_hash = hashlib.md5(str(trace).encode()).hexdigest()[:8]
-        return f"score_{timestamp}_{trace_hash}"
+        """Generate a collision-resistant unique score ID using UUID4."""
+        return f"score_{uuid.uuid4().hex[:12]}"
         
     def _evaluate_metrics(self,
                          reasoning_trace: List[Dict[str, Any]],

@@ -116,32 +116,46 @@ class MemoryStore:
 
 class MemorySystem:
     """Core memory management system"""
-    def __init__(self, 
+    def __init__(self,
                  working_memory_capacity: int = 100,
                  storage_path: Path = Path("./memory_store")):
         self.working_memory = MemoryBuffer(working_memory_capacity)
         self.long_term_store = MemoryStore(storage_path)
         self.emotional_processor = EmotionalProcessor()
         self.consolidation_queue = queue.PriorityQueue()
+        self._stop_consolidation = threading.Event()
         self._start_background_tasks()
 
     def _start_background_tasks(self):
         """Start background processing threads"""
         self.consolidation_thread = threading.Thread(
             target=self._consolidation_worker,
-            daemon=True
+            daemon=True,
+            name="MemoryConsolidationWorker",
         )
         self.consolidation_thread.start()
 
     def _consolidation_worker(self):
         """Background worker for memory consolidation"""
-        while True:
+        while not self._stop_consolidation.is_set():
             try:
-                priority, memory = self.consolidation_queue.get()
+                # Use timeout so the loop can check the stop event regularly
+                try:
+                    priority, memory = self.consolidation_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
                 self._process_consolidation(memory)
                 self.consolidation_queue.task_done()
-            except Exception as e:
-                print(f"Error in consolidation worker: {e}")
+            except Exception as exc:
+                import logging as _logging
+                _logging.getLogger(__name__).error(
+                    "Error in consolidation worker: %s", exc
+                )
+
+    def shutdown(self):
+        """Gracefully stop the background consolidation thread."""
+        self._stop_consolidation.set()
+        self.consolidation_thread.join(timeout=5.0)
 
     def _process_consolidation(self, memory: MemoryItem):
         """Process memory consolidation"""
@@ -205,7 +219,30 @@ class MemorySystem:
 
         return ""
 
-    def retrieve_memory(self, 
+    def store_episode(self, episode: Dict[str, Any]) -> bool:
+        """Store a complete reasoning-cycle episode in long-term memory.
+
+        Args:
+            episode: Dict containing cycle inputs, outputs, and metadata.
+
+        Returns:
+            True on success, False on failure.
+        """
+        try:
+            validation_status = str(episode.get("validation", "unknown"))
+            self.add_memory(
+                content=episode,
+                memory_type=MemoryType.LONG_TERM,
+                emotional_tags=[EmotionalTag.IMPORTANT],
+                context_tags=["episode", validation_status],
+                metadata={"stored_at": datetime.now().isoformat()},
+            )
+            return True
+        except Exception as exc:
+            print(f"Failed to store episode: {exc}")
+            return False
+
+    def retrieve_memory(self,
                        memory_id: str = None,
                        context_tags: List[str] = None,
                        emotional_tags: List[EmotionalTag] = None) -> List[MemoryItem]:

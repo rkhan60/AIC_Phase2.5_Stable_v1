@@ -3,10 +3,14 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from enum import Enum
 import logging
+import uuid
 from ..memory.memory_system import MemoryItem, MemoryType, EmotionalTag
 from ..memory.memory_query import MemoryQueryEngine
+from ..config import config
 
 logger = logging.getLogger(__name__)
+
+_MAX_DESCRIPTION_LENGTH = 2000
 
 class GoalType(Enum):
     STRATEGIC = "strategic"  # Long-term strategic objectives
@@ -59,6 +63,15 @@ class Goal:
     created_at: datetime = field(default_factory=datetime.now)
     modified_at: datetime = field(default_factory=datetime.now)
 
+@dataclass
+class GoalHierarchy:
+    """Hierarchical structure of a main goal and its decomposed subgoals."""
+    main_goal: Goal
+    subgoals: List[Goal] = field(default_factory=list)
+    depth: int = 1
+    created_at: datetime = field(default_factory=datetime.now)
+
+
 class GoalPlanner:
     """Agent for translating input into structured goals"""
     def __init__(self, memory_query: MemoryQueryEngine):
@@ -66,23 +79,48 @@ class GoalPlanner:
         self.goals: Dict[str, Goal] = {}
         self.reasoning_history: List[Dict[str, Any]] = []
         
-    def create_goal(self, 
+    def create_goal(self,
                    input_data: Any,
                    context: Dict[str, Any]) -> Goal:
-        """Create structured goal from input"""
+        """Create structured goal from input.
+
+        Args:
+            input_data: Goal description (str) or any object convertible to str.
+            context:    Execution context dict.  Non-dict values are silently
+                        replaced with an empty dict.
+
+        Raises:
+            ValueError: If input_data is empty after conversion to str.
+        """
+        # --- Input validation ---
+        if not input_data and input_data != 0:
+            raise ValueError("input_data must not be empty")
+        description = str(input_data).strip()
+        if not description:
+            raise ValueError("input_data must not be blank")
+        if len(description) > _MAX_DESCRIPTION_LENGTH:
+            logger.warning(
+                "input_data truncated from %d to %d characters",
+                len(description), _MAX_DESCRIPTION_LENGTH,
+            )
+            description = description[:_MAX_DESCRIPTION_LENGTH]
+        if not isinstance(context, dict):
+            logger.warning("context is not a dict (%s); using empty dict", type(context))
+            context = {}
+
         # Generate goal ID
-        goal_id = self._generate_goal_id(input_data)
+        goal_id = self._generate_goal_id(description)
         
         # Analyze input and context
-        goal_type = self._determine_goal_type(input_data, context)
-        success_criteria = self._define_success_criteria(input_data, context)
+        goal_type = self._determine_goal_type(description, context)
+        success_criteria = self._define_success_criteria(description, context)
         
         # Create initial goal
         goal = Goal(
             id=goal_id,
             type=goal_type,
-            description=str(input_data),
-            success_criteria=success_criteria
+            description=description,
+            success_criteria=success_criteria,
         )
         
         # Evaluate and set metrics
@@ -91,7 +129,7 @@ class GoalPlanner:
         # Document reasoning
         reasoning = {
             'timestamp': datetime.now(),
-            'input': input_data,
+            'input': description,
             'context': context,
             'analysis': {
                 'goal_type': goal_type.value,
@@ -178,78 +216,164 @@ class GoalPlanner:
         return subgoals
         
     def _generate_goal_id(self, input_data: Any) -> str:
-        """Generate unique goal ID"""
-        import hashlib
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        hash_input = f"{timestamp}_{str(input_data)}"
-        return f"goal_{hashlib.md5(hash_input.encode()).hexdigest()[:8]}"
-        
+        """Generate a collision-resistant unique goal ID using UUID4."""
+        return f"goal_{uuid.uuid4().hex[:12]}"
+
     def _determine_goal_type(self,
-                           input_data: Any,
-                           context: Dict[str, Any]) -> GoalType:
-        """Determine appropriate goal type"""
-        # Implementation would analyze input and context
+                             input_data: Any,
+                             context: Dict[str, Any]) -> GoalType:
+        """Classify the goal type from keywords in the description."""
+        desc = str(input_data).lower()
+        cfg = config.goal
+
+        if any(kw in desc for kw in cfg.immediate_keywords):
+            return GoalType.IMMEDIATE
+        if any(kw in desc for kw in cfg.adaptive_keywords):
+            return GoalType.ADAPTIVE
+        if any(kw in desc for kw in cfg.tactical_keywords) and not context.get('long_term'):
+            return GoalType.TACTICAL
         return GoalType.STRATEGIC
-        
+
     def _define_success_criteria(self,
-                               input_data: Any,
-                               context: Dict[str, Any]) -> List[str]:
-        """Define measurable success criteria"""
-        # Implementation would extract concrete criteria
-        return ["Criterion 1", "Criterion 2"]
-        
+                                 input_data: Any,
+                                 context: Dict[str, Any]) -> List[str]:
+        """Derive measurable success criteria from the description and context."""
+        desc = str(input_data)
+        criteria: List[str] = [f"Successfully address: {desc[:120]}",
+                                "Measurable outcome documented and validated by stakeholders"]
+
+        if context.get('required_accuracy'):
+            criteria.append(f"Achieve target accuracy >= {context['required_accuracy']}")
+        if context.get('time_constraint'):
+            criteria.append(f"Complete within the defined time constraint: {context['time_constraint']}")
+        if context.get('domain'):
+            criteria.append(f"Solution validated for the {context['domain']} domain")
+        if context.get('budget'):
+            criteria.append(f"Delivered within budget: {context['budget']}")
+
+        return criteria
+
     def _evaluate_goal_metrics(self,
-                             goal: Goal,
-                             context: Dict[str, Any]) -> GoalMetrics:
-        """Evaluate goal metrics"""
-        metrics = GoalMetrics()
-        
-        # Evaluate clarity
-        metrics.clarity = self._evaluate_clarity(goal)
-        
-        # Evaluate feasibility
-        metrics.feasibility = self._evaluate_feasibility(goal, context)
-        
-        # Evaluate impact
-        metrics.impact = self._evaluate_impact(goal, context)
-        
-        # Evaluate urgency
-        metrics.urgency = self._evaluate_urgency(goal, context)
-        
-        # Evaluate alignment
-        metrics.alignment = self._evaluate_alignment(goal, context)
-        
-        return metrics
-        
+                               goal: Goal,
+                               context: Dict[str, Any]) -> GoalMetrics:
+        """Compute all goal metrics."""
+        return GoalMetrics(
+            clarity=self._evaluate_clarity(goal),
+            feasibility=self._evaluate_feasibility(goal, context),
+            impact=self._evaluate_impact(goal, context),
+            urgency=self._evaluate_urgency(goal, context),
+            alignment=self._evaluate_alignment(goal, context),
+        )
+
     def _evaluate_clarity(self, goal: Goal) -> float:
-        """Evaluate goal clarity"""
+        """Score how clearly the goal is defined."""
         factors = [
             bool(goal.description),
+            len(goal.description) >= 20,
             bool(goal.success_criteria),
-            len(goal.success_criteria) > 0,
-            all(len(c) > 10 for c in goal.success_criteria)  # Minimum detail
+            len(goal.success_criteria) >= 2,
+            all(len(c) > 10 for c in goal.success_criteria),
         ]
-        return sum(1 for f in factors if f) / len(factors)
-        
+        return round(sum(1 for f in factors if f) / len(factors), 4)
+
     def _evaluate_feasibility(self, goal: Goal, context: Dict[str, Any]) -> float:
-        """Evaluate goal feasibility"""
-        # Implementation would assess resources, constraints, etc.
-        return 0.7
-        
+        """Score how achievable the goal is, based on dependencies and context."""
+        cfg = config.goal
+        score = 0.50
+
+        # Penalise for each hard dependency
+        dep_penalty = min(cfg.max_dependency_penalty,
+                          len(goal.dependencies) * cfg.dependency_penalty_per_item)
+        score -= dep_penalty
+
+        # Reward if resources or budget are mentioned
+        if context.get('resources') or context.get('budget'):
+            score += cfg.resource_availability_boost
+
+        # Reward clear, detailed success criteria
+        if len(goal.success_criteria) >= 3:
+            score += cfg.clear_criteria_boost
+
+        # Vague description is a negative signal
+        if len(goal.description) < 20:
+            score -= 0.10
+
+        # A stated time constraint shows planning maturity
+        if context.get('time_constraint') or context.get('deadline'):
+            score += cfg.time_constraint_boost
+
+        return round(max(0.0, min(1.0, score)), 4)
+
     def _evaluate_impact(self, goal: Goal, context: Dict[str, Any]) -> float:
-        """Evaluate expected impact"""
-        # Implementation would assess potential outcomes
-        return 0.8
-        
+        """Score the expected business impact of the goal."""
+        cfg = config.goal
+        score = 0.50
+        desc_lower = goal.description.lower()
+
+        impact_hits = sum(1 for kw in cfg.high_impact_keywords if kw in desc_lower)
+        score += min(cfg.max_impact_keyword_boost,
+                     impact_hits * cfg.impact_keyword_boost_per_hit)
+
+        if goal.type == GoalType.STRATEGIC:
+            score += cfg.strategic_type_impact_boost
+        elif goal.type == GoalType.TACTICAL:
+            score += cfg.tactical_type_impact_boost
+
+        if len(goal.success_criteria) >= 3:
+            score += 0.05
+
+        return round(max(0.0, min(1.0, score)), 4)
+
     def _evaluate_urgency(self, goal: Goal, context: Dict[str, Any]) -> float:
-        """Evaluate time sensitivity"""
-        # Implementation would assess temporal factors
-        return 0.5
-        
+        """Score the time-sensitivity of the goal."""
+        cfg = config.goal
+        score = 0.30
+        desc_lower = goal.description.lower()
+
+        if any(kw in desc_lower for kw in cfg.urgency_keywords):
+            score += cfg.urgency_keyword_boost
+
+        time_constraint = context.get('time_constraint')
+        if time_constraint:
+            try:
+                if float(time_constraint) < 48:
+                    score += cfg.time_constraint_tight_boost
+                else:
+                    score += cfg.time_constraint_boost
+            except (TypeError, ValueError):
+                score += cfg.time_constraint_boost
+
+        if goal.type == GoalType.IMMEDIATE:
+            score += cfg.immediate_goal_type_boost
+        elif goal.type == GoalType.ADAPTIVE:
+            score += cfg.adaptive_goal_type_boost
+
+        return round(max(0.0, min(1.0, score)), 4)
+
     def _evaluate_alignment(self, goal: Goal, context: Dict[str, Any]) -> float:
-        """Evaluate alignment with higher goals"""
-        # Implementation would assess goal hierarchy
-        return 0.9
+        """Score how well the goal aligns with existing goals in the planner."""
+        cfg = config.goal
+        score = 0.60
+
+        if context.get('strategic_priority') or context.get('domain'):
+            score += cfg.alignment_context_boost
+
+        existing = [g for g in self.goals.values() if g.id != goal.id]
+        if not existing:
+            return round(min(1.0, score), 4)
+
+        desc_words = set(goal.description.lower().split())
+        overlaps = []
+        for other in existing:
+            other_words = set(other.description.lower().split())
+            if desc_words:
+                overlaps.append(
+                    len(desc_words & other_words) / len(desc_words)
+                )
+        if overlaps:
+            score += (sum(overlaps) / len(overlaps)) * cfg.alignment_keyword_overlap_weight
+
+        return round(max(0.0, min(1.0, score)), 4)
         
     def _generate_rationale(self, goal: Goal) -> str:
         """Generate reasoning rationale"""
@@ -261,4 +385,22 @@ class GoalPlanner:
         """Get complete reasoning trace for goal"""
         if goal_id not in self.goals:
             return []
-        return self.goals[goal_id].reasoning_trace 
+        return self.goals[goal_id].reasoning_trace
+
+    def plan_goal(self, goal_input: str, context: Dict[str, Any]) -> GoalHierarchy:
+        """Create a GoalHierarchy from a free-text goal description.
+
+        Args:
+            goal_input: Natural language description of the goal.
+            context: Execution context (domain, constraints, etc.).
+
+        Returns:
+            GoalHierarchy with a main goal and zero or more subgoals.
+        """
+        main_goal = self.create_goal(goal_input, context)
+        subgoals = self.decompose_goal(main_goal.id)
+        return GoalHierarchy(
+            main_goal=main_goal,
+            subgoals=subgoals,
+            depth=2 if subgoals else 1,
+        )

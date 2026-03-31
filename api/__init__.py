@@ -1,0 +1,1 @@
+"""AIC REST API package."""
