@@ -1,4 +1,5 @@
 """Agent orchestrator — routes analysis requests through ConsultingService."""
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -17,16 +18,15 @@ def run_agentic_analysis(
     Parameters mirror the original simulation signature so existing callers
     continue to work without modification.
     """
-    base_dir = Path(__file__).parent.parent.parent
-    db_path = str(base_dir / "data" / "aic.db")
-    (base_dir / "data").mkdir(parents=True, exist_ok=True)
-    (base_dir / "memory").mkdir(exist_ok=True)
+    base = Path(__file__).parent.parent.parent
+    (base / "data").mkdir(parents=True, exist_ok=True)
+    (base / "memory").mkdir(exist_ok=True)
 
     from ..consulting_service import ConsultingService
 
     svc = ConsultingService(
-        memory_dir=str(base_dir / "memory"),
-        db_path=db_path,
+        memory_dir=str(base / "memory"),
+        db_path=str(base / "data" / "aic.db"),
     )
 
     context: Dict[str, Any] = {

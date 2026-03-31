@@ -1,190 +1,203 @@
-"""AIC Streamlit Web Interface."""
+"""AIC Streamlit application — 4-page consulting interface."""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
 
 import streamlit as st
-from pathlib import Path
-import sys
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Ensure project root is on path when launched directly
+_ROOT = Path(__file__).parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 st.set_page_config(
-    page_title="AI Consulting System",
-    page_icon="🤖",
+    page_title="AIC — AI Consulting System",
+    page_icon=":bar_chart:",
     layout="wide",
 )
 
 
-@st.cache_resource(show_spinner="Initialising consulting engine…")
-def get_service():
+@st.cache_resource(show_spinner="Loading consulting engine...")
+def _get_service():
     from core.consulting_service import ConsultingService
-    db_path = str(Path(__file__).parent.parent / "data" / "aic.db")
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    Path("memory").mkdir(exist_ok=True)
-    return ConsultingService(memory_dir="memory", db_path=db_path)
+    base = _ROOT
+    return ConsultingService(
+        memory_dir=str(base / "memory"),
+        db_path=str(base / "data" / "aic.db"),
+    )
 
 
+# ------------------------------------------------------------------
+# Sidebar navigation
+# ------------------------------------------------------------------
 with st.sidebar:
-    st.title("🤖 AIC")
-    st.markdown("**AI Consulting System**")
+    st.title("AIC")
+    st.caption("AI Consulting System v5.0")
     page = st.radio(
-        "Navigation",
+        "Navigate",
         ["Dashboard", "Consulting Analysis", "Session History", "System Info"],
-        label_visibility="collapsed",
     )
     st.divider()
-    st.caption("Phase 5 — Production Build")
+    st.caption("Persistent sessions stored in SQLite.")
 
 
-# ===========================================================================
-# Dashboard
-# ===========================================================================
+# ==================================================================
+# Page: Dashboard
+# ==================================================================
 if page == "Dashboard":
-    st.title("Dashboard")
-    st.markdown("Welcome to the AI Consulting System.")
+    st.header("Dashboard")
 
-    svc = get_service()
+    svc = _get_service()
     sessions = svc.list_sessions(limit=100)
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Total Sessions", len(sessions))
-    with c2:
-        valid = sum(1 for s in sessions if s.get("validation_status") == "valid")
-        st.metric("Validation Pass Rate", f"{valid/len(sessions):.0%}" if sessions else "—")
-    with c3:
-        avg_conf = sum(s.get("confidence", 0) for s in sessions) / len(sessions) if sessions else 0
-        st.metric("Avg Confidence", f"{avg_conf:.0%}" if sessions else "—")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Sessions", len(sessions))
+    validated = sum(1 for s in sessions if s.get("validation_status") == "valid")
+    col2.metric("Validated Analyses", validated)
+    avg_conf = (
+        round(sum(s.get("confidence", 0) for s in sessions) / len(sessions), 2)
+        if sessions else 0.0
+    )
+    col3.metric("Avg Confidence", f"{avg_conf:.0%}")
 
     if sessions:
         st.subheader("Recent Sessions")
-        for s in sessions[:5]:
-            with st.expander(f"🔹 {s.get('problem','')[:80]}  ({s.get('session_id','')[:8]})"):
-                st.write(f"**Validation:** {s.get('validation_status','—')} | "
-                         f"**Confidence:** {s.get('confidence',0):.0%}")
+        import pandas as pd
+        df = pd.DataFrame([
+            {
+                "Session ID": s["session_id"][:8] + "...",
+                "Problem": s.get("problem", "")[:60] + "...",
+                "Confidence": f"{s.get('confidence', 0):.0%}",
+                "Validation": s.get("validation_status", ""),
+                "Date": s.get("created_at", "")[:19],
+            }
+            for s in sessions[:10]
+        ])
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No sessions yet. Run a consulting analysis to get started.")
 
 
-# ===========================================================================
-# Consulting Analysis
-# ===========================================================================
+# ==================================================================
+# Page: Consulting Analysis
+# ==================================================================
 elif page == "Consulting Analysis":
-    st.title("Consulting Analysis")
-    st.markdown("Describe your business problem to receive a structured consulting report.")
+    st.header("Consulting Analysis")
 
     with st.sidebar:
         st.subheader("Business Context")
-        industry = st.selectbox("Industry", [
-            "general", "retail", "SaaS", "manufacturing", "healthcare",
-            "finance", "logistics", "hospitality", "education",
-        ])
-        company_size = st.selectbox("Company Size",
-                                    ["micro", "sme", "mid-market", "enterprise"], index=1)
-        market_position = st.selectbox("Market Position",
-                                       ["leader", "challenger", "follower", "niche"], index=1)
-        strategic_priorities = st.text_input("Strategic Priorities (comma-separated)",
-                                             placeholder="growth, efficiency, innovation")
+        industry = st.text_input("Industry", value="general")
+        company_size = st.selectbox(
+            "Company Size",
+            ["micro", "sme", "mid-market", "enterprise"],
+            index=1,
+        )
+        market_position = st.selectbox(
+            "Market Position",
+            ["leader", "challenger", "follower", "niche"],
+            index=1,
+        )
+        priorities = st.text_area(
+            "Strategic Priorities (one per line)", height=80
+        )
 
-    problem = st.text_area("Business Problem",
-                           placeholder="e.g. We are losing market share…", height=130)
+    problem = st.text_area(
+        "Describe your business problem",
+        height=150,
+        placeholder="e.g. We are losing market share to low-cost competitors in the mid-market segment...",
+    )
 
-    if st.button("Analyse", type="primary"):
-        if not problem.strip():
-            st.error("Please enter a business problem.")
-        else:
-            context = {
-                "industry": industry,
-                "company_size": company_size,
-                "market_position": market_position,
-                "strategic_priorities": [p.strip() for p in strategic_priorities.split(",") if p.strip()],
-            }
-            with st.spinner("Running autonomous analysis…"):
-                svc = get_service()
-                try:
-                    report = svc.analyze(problem.strip(), context)
-                except Exception as exc:
-                    st.error(f"Analysis failed: {exc}")
-                    st.stop()
+    if st.button("Analyze", type="primary", disabled=not problem.strip()):
+        context = {
+            "industry": industry,
+            "company_size": company_size,
+            "market_position": market_position,
+            "strategic_priorities": [p.strip() for p in priorities.splitlines() if p.strip()],
+        }
+        with st.spinner("Running analysis..."):
+            svc = _get_service()
+            try:
+                report = svc.analyze(problem, context)
+            except Exception as exc:
+                st.error(f"Analysis failed: {exc}")
+                st.stop()
 
-            st.success(f"Analysis complete — Session `{report.session_id[:8]}`")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Confidence", f"{report.confidence:.0%}")
+        col2.metric("Validation", report.validation_status)
+        col3.metric("Session", report.session_id[:8] + "...")
+        if report.past_sessions_used:
+            st.caption(f"Informed by {report.past_sessions_used} similar past session(s).")
 
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Confidence", f"{report.confidence:.0%}")
-            m2.metric("Validation", report.validation_status.capitalize())
-            m3.metric("Past Sessions Used", report.past_sessions_used)
+        tab1, tab2, tab3 = st.tabs(["Reasoning", "Critique", "Framework Analyses"])
 
-            with st.expander("🧠 Autonomous Reasoning", expanded=True):
-                st.markdown(report.reasoning_summary)
-                st.caption(f"Validation: **{report.validation_status}**")
+        with tab1:
+            st.markdown(report.reasoning_summary)
 
-            with st.expander("🔍 Self-Critique"):
-                st.markdown(report.critique_summary)
-                st.caption(f"Critique score: {report.critique_score:.2f}")
-
+        with tab2:
+            st.markdown(report.critique_summary)
             if report.recommended_frameworks:
-                with st.expander("📋 Recommended Frameworks"):
-                    for fw in report.recommended_frameworks:
-                        st.markdown(f"- **{fw.replace('_',' ').title()}**")
+                st.subheader("Recommended Frameworks")
+                for fw in report.recommended_frameworks:
+                    st.markdown(f"- `{fw}`")
 
-            with st.expander("📊 Framework Analyses", expanded=True):
-                for fw_name, analysis in report.framework_analyses.items():
-                    st.subheader(fw_name.replace("_", " ").title())
+        with tab3:
+            for fw_name, analysis in report.framework_analyses.items():
+                if fw_name in ("problem", "context_summary", "aggregated_recommendations"):
+                    continue
+                with st.expander(fw_name.upper().replace("_", " ")):
                     if isinstance(analysis, dict):
                         for k, v in analysis.items():
                             if k not in ("framework", "problem"):
-                                label = k.replace("_", " ").title()
-                                if isinstance(v, list):
-                                    st.markdown(f"**{label}:**")
-                                    for item in v:
-                                        st.markdown(f"  - {item}")
-                                elif isinstance(v, dict):
-                                    st.markdown(f"**{label}:**")
-                                    st.json(v)
-                                else:
-                                    st.markdown(f"**{label}:** {v}")
-                    st.divider()
+                                st.write(f"**{k}:** {v}")
+                    else:
+                        st.write(analysis)
+
+            agg = report.framework_analyses.get("aggregated_recommendations", [])
+            if agg:
+                st.subheader("Aggregated Recommendations")
+                for rec in agg:
+                    st.markdown(f"- {rec}")
 
 
-# ===========================================================================
-# Session History
-# ===========================================================================
+# ==================================================================
+# Page: Session History
+# ==================================================================
 elif page == "Session History":
-    st.title("Session History")
-    svc = get_service()
+    st.header("Session History")
+    svc = _get_service()
     sessions = svc.list_sessions(limit=50)
 
     if not sessions:
-        st.info("No sessions yet. Run a Consulting Analysis to get started.")
+        st.info("No sessions recorded yet.")
     else:
         for s in sessions:
-            with st.expander(f"[{s.get('session_id','')[:8]}] {s.get('problem','')[:70]}"):
-                st.write(f"**Confidence:** {s.get('confidence',0):.0%}  |  "
-                         f"**Validation:** {s.get('validation_status','—')}  |  "
-                         f"**Created:** {s.get('created_at','—')}")
-                if s.get("reasoning_summary"):
-                    st.markdown("**Reasoning:** " + s["reasoning_summary"])
+            label = f"{s.get('created_at', '')[:19]} | {s.get('problem', '')[:60]}"
+            with st.expander(label):
+                st.write(f"**Session ID:** {s['session_id']}")
+                st.write(f"**Confidence:** {s.get('confidence', 0):.0%}")
+                st.write(f"**Validation:** {s.get('validation_status', 'N/A')}")
+                st.write(f"**Reasoning:**\n{s.get('reasoning_summary', '')}")
+                st.write(f"**Critique:**\n{s.get('critique_summary', '')}")
 
 
-# ===========================================================================
-# System Info
-# ===========================================================================
+# ==================================================================
+# Page: System Info
+# ==================================================================
 elif page == "System Info":
-    st.title("System Info")
+    st.header("System Info")
     st.markdown("""
-### AIC — AI Consulting System
-
-**Architecture:**
-- Autonomous pipeline: GoalPlanner → IntentionManager → ThoughtProcessor → ReasoningValidator → SelfCritic
-- Consulting frameworks: SWOT, Porter's Five Forces, McKinsey 7S, MECE, Ansoff, BCG
-- Persistent storage: SQLite
-- REST API: FastAPI on port 8000
-
-**Phase 5 Features:**
-- PyTorch dead code removed — pure Python consulting engine
-- End-to-end consulting analysis via CLI, Streamlit, and REST API
-- Self-learning: past sessions inform new analyses
-- Docker-ready deployment
-    """)
-    try:
-        from core.engine import create_aic_system
-        engine = create_aic_system()
-        st.success(f"✓ Engine: {type(engine).__name__}")
-    except Exception as exc:
-        st.error(f"❌ Engine error: {exc}")
+| Component | Description |
+|-----------|-------------|
+| **ConsultingService** | Central facade composing pipeline + framework engine |
+| **AutonomousPipeline** | Reasoning, validation, self-critique loop |
+| **ConsultingFrameworkEngine** | SWOT, Porter's 5 Forces, McKinsey 7S, MECE, Ansoff, BCG |
+| **SessionRepository** | SQLite persistence for all analysis sessions |
+| **REST API** | FastAPI — `POST /api/v1/analyze`, session CRUD, health check |
+| **Streamlit** | This interface |
+""")
+    st.subheader("Start REST API")
+    st.code("uvicorn api.main:app --reload --port 8000", language="bash")
+    st.subheader("Docker Compose")
+    st.code("docker-compose up --build", language="bash")

@@ -1,31 +1,19 @@
-"""ConsultingService — the single facade for all consulting analysis.
-
-This module composes the AutonomousPipeline (goal → reasoning → validation →
-self-critique) with the ConsultingFrameworkEngine (SWOT, Porter's, McKinsey 7S,
-MECE, Ansoff, BCG) into a single ``analyze()`` call.
-
-All user-facing entry points (main.py, Streamlit, CLI, REST API) should use
-this class rather than instantiating the pipeline or framework engine directly.
-"""
+"""ConsultingService — main facade for the AIC product."""
 
 from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Public data model
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ConsultingReport:
-    """Structured output of a consulting analysis session."""
+    """Structured output from a consulting analysis run."""
     session_id: str
     problem: str
     reasoning_summary: str
@@ -33,152 +21,163 @@ class ConsultingReport:
     critique_summary: str
     critique_score: float
     framework_analyses: Dict[str, Any]
-    recommended_frameworks: List[str]
+    recommended_frameworks: List[Any]
     confidence: float
     context: Dict[str, Any]
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime
     past_sessions_used: int = 0
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "session_id": self.session_id,
-            "problem": self.problem,
-            "reasoning_summary": self.reasoning_summary,
-            "validation_status": self.validation_status,
-            "critique_summary": self.critique_summary,
-            "critique_score": self.critique_score,
-            "framework_analyses": self.framework_analyses,
-            "recommended_frameworks": self.recommended_frameworks,
-            "confidence": self.confidence,
-            "context": self.context,
-            "created_at": self.created_at.isoformat(),
-            "past_sessions_used": self.past_sessions_used,
-            "metadata": self.metadata,
-        }
+        d = asdict(self)
+        d["created_at"] = self.created_at.isoformat()
+        return d
 
-
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
 
 class ConsultingService:
-    """Orchestrates the autonomous pipeline and the consulting framework engine.
+    """Facade composing AutonomousPipeline + ConsultingFrameworkEngine.
 
-    Parameters
-    ----------
-    memory_dir:
-        Directory used by the AutonomousPipeline for its memory store.
-    db_path:
-        Optional path to a SQLite database for persistent session storage.
-        When None the service operates in memory-only mode.
+    Lazy initialisation: heavy components are created on first call to
+    ``analyze()``, not at import time.
     """
 
-    def __init__(self, memory_dir: str = "memory", db_path: Optional[str] = None):
+    def __init__(
+        self,
+        memory_dir: str = "memory",
+        db_path: Optional[str] = None,
+    ):
         self._memory_dir = memory_dir
         self._db_path = db_path
-        self._pipeline = None          # lazy-initialised (SentenceTransformer is slow)
+        self._pipeline = None
         self._framework_engine = None
         self._session_repo = None
 
-        # Wire persistent storage if available
-        if db_path:
-            self._init_storage(db_path)
-
     # ------------------------------------------------------------------
-    # Lazy initialisation helpers
+    # Initialisation (lazy)
     # ------------------------------------------------------------------
 
-    def _ensure_pipeline(self):
-        if self._pipeline is None:
+    def _ensure_init(self) -> None:
+        if self._framework_engine is not None:
+            return
+
+        from .aic_system import ConsultingFrameworkEngine
+        self._framework_engine = ConsultingFrameworkEngine()
+
+        # Autonomous pipeline requires SentenceTransformer model download;
+        # degrade gracefully in air-gapped / offline environments.
+        try:
             from .pipeline_autonomy import AutonomousPipeline
             self._pipeline = AutonomousPipeline(memory_dir=self._memory_dir)
-
-    def _ensure_framework_engine(self):
-        if self._framework_engine is None:
-            from .aic_system import ConsultingFrameworkEngine
-            self._framework_engine = ConsultingFrameworkEngine()
-
-    def _init_storage(self, db_path: str):
-        try:
-            from .storage.session_repository import SessionRepository
-            from .storage.database import DatabaseManager
-            db = DatabaseManager(db_path)
-            db.create_tables()
-            self._session_repo = SessionRepository(db)
-            logger.info("Persistent session storage enabled at %s", db_path)
+            logger.info("AutonomousPipeline initialised.")
         except Exception as exc:
-            logger.warning("Could not initialise persistent storage: %s", exc)
-            self._session_repo = None
+            logger.warning(
+                "AutonomousPipeline unavailable (%s) — using framework-only mode.", exc
+            )
+            self._pipeline = None
+
+        if self._db_path:
+            try:
+                from .storage.database import DatabaseManager
+                from .storage.session_repository import SessionRepository
+                db = DatabaseManager(self._db_path)
+                db.create_tables()
+                self._session_repo = SessionRepository(db)
+                logger.info("Persistent storage enabled at %s", self._db_path)
+            except Exception as exc:
+                logger.warning("Storage init failed (%s) — running without persistence.", exc)
 
     # ------------------------------------------------------------------
-    # Core API
+    # Public API
     # ------------------------------------------------------------------
 
-    def analyze(self, problem: str, context: Optional[Dict[str, Any]] = None) -> ConsultingReport:
-        """Run a full consulting analysis and return a structured report.
+    def analyze(
+        self,
+        problem: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> ConsultingReport:
+        """Run a full consulting analysis.
 
-        Steps:
-          1. Retrieve relevant past sessions (if storage is enabled).
-          2. Run the autonomous pipeline (goal planning → reasoning → validation
-             → self-critique).
-          3. Run the consulting framework engine.
-          4. Combine results into a ConsultingReport.
-          5. Persist the session (if storage is enabled).
+        1. Retrieve similar past sessions for context enrichment.
+        2. Run the autonomous reasoning pipeline.
+        3. Apply framework analyses.
+        4. Persist the result.
         """
         if not problem or not problem.strip():
-            raise ValueError("problem must be a non-empty string")
+            raise ValueError("problem must not be empty")
 
-        context = dict(context or {})
-        session_id = uuid.uuid4().hex[:16]
-        past_sessions_used = 0
+        self._ensure_init()
+        context = context or {}
+        session_id = str(uuid.uuid4())
 
-        # ---- 1. Past sessions context --------------------------------
+        # 1. Past sessions
+        past_sessions: List[Dict] = []
         if self._session_repo:
             try:
-                past = self._session_repo.find_similar(problem, limit=3)
-                if past:
-                    context["past_sessions"] = [
-                        {"problem": s.get("problem", ""), "summary": s.get("reasoning_summary", "")}
-                        for s in past
-                    ]
-                    past_sessions_used = len(past)
+                past_sessions = self._session_repo.find_similar(problem, limit=3)
             except Exception as exc:
-                logger.warning("Could not load past sessions: %s", exc)
+                logger.warning("Could not retrieve past sessions: %s", exc)
 
-        # ---- 2. Autonomous pipeline ----------------------------------
-        reasoning_summary = "Pipeline not executed"
-        validation_status = "unknown"
-        critique_summary = "No critique"
-        critique_score = 0.0
-        pipeline_confidence = 0.5
+        # Enrich pipeline context with past learning
+        pipeline_context: Dict[str, Any] = dict(context)
+        if past_sessions:
+            pipeline_context["past_sessions"] = [
+                {"problem": s.get("problem"), "summary": s.get("reasoning_summary")}
+                for s in past_sessions[:3]
+            ]
 
+        # 2. Autonomous pipeline (may be None in offline/degraded mode)
+        cycle_result = None
+        if self._pipeline is not None:
+            try:
+                cycle_result = self._pipeline.run_cycle(problem, pipeline_context)
+                reasoning_summary = cycle_result.reasoning_summary
+                validation_status = cycle_result.validation_status
+                critique_summary = getattr(cycle_result, "self_critic_summary", "No critique available.")
+                pipeline_confidence = cycle_result.metadata.get("confidence_score", 0.75)
+            except Exception as exc:
+                logger.error("Pipeline error: %s", exc, exc_info=True)
+                reasoning_summary = f"Autonomous reasoning encountered an error: {exc}"
+                validation_status = "error"
+                critique_summary = "Analysis incomplete."
+                pipeline_confidence = 0.5
+        else:
+            reasoning_summary = (
+                f"Framework-only analysis for: {problem[:120]}\n"
+                "Autonomous reasoning pipeline is offline (model download unavailable). "
+                "Structured framework analyses are provided below."
+            )
+            validation_status = "framework_only"
+            critique_summary = (
+                "Full self-critique requires the autonomous pipeline. "
+                "Review the framework analyses for actionable recommendations."
+            )
+            pipeline_confidence = 0.75
+
+        # 3. Framework analyses
+        from .aic_system import BusinessContext, ConsultingFramework
+        biz_context = BusinessContext(
+            industry=context.get("industry", "general"),
+            company_size=context.get("company_size", "sme"),
+            market_position=context.get("market_position", "challenger"),
+            strategic_priorities=context.get("strategic_priorities", []),
+            cultural_context=context.get("cultural_context", ""),
+        )
+
+        recommended_frameworks = self._framework_engine.recommend_frameworks(biz_context)
         try:
-            self._ensure_pipeline()
-            result = self._pipeline.run_cycle(problem, context)
-            reasoning_summary = result.reasoning_summary
-            validation_status = result.validation_status
-            critique_summary = result.self_critic_summary
-            # AutonomousResult stores overall_score in metadata
-            critique_score = float(result.metadata.get("critique_score", 0.0))
-            pipeline_confidence = 0.8 if validation_status == "valid" else 0.4
+            framework_analyses = self._framework_engine.analyse(
+                problem, biz_context, recommended_frameworks
+            )
         except Exception as exc:
-            logger.error("Autonomous pipeline error: %s", exc, exc_info=True)
+            logger.error("Framework analysis error: %s", exc)
+            framework_analyses = {"error": str(exc)}
 
-        # ---- 3. Framework analysis -----------------------------------
-        framework_analyses: Dict[str, Any] = {}
-        recommended_frameworks: List[str] = []
-
-        try:
-            self._ensure_framework_engine()
-            business_ctx = self._build_business_context(context)
-            recommended_frameworks = self._framework_engine.recommend_frameworks(business_ctx)
-            framework_analyses = self._framework_engine.analyse(problem, business_ctx)
-        except Exception as exc:
-            logger.error("Framework engine error: %s", exc, exc_info=True)
-
-        # ---- 4. Combine --------------------------------------------
-        confidence = round((pipeline_confidence + (critique_score or 0.5)) / 2, 4)
+        # Critique score from metadata or default
+        critique_score = float(
+            cycle_result.metadata.get("critique_score", 0.7)
+            if cycle_result is not None
+            else 0.7
+        )
 
         report = ConsultingReport(
             session_id=session_id,
@@ -189,48 +188,33 @@ class ConsultingService:
             critique_score=critique_score,
             framework_analyses=framework_analyses,
             recommended_frameworks=recommended_frameworks,
-            confidence=confidence,
-            context={k: v for k, v in context.items() if k != "past_sessions"},
-            past_sessions_used=past_sessions_used,
+            confidence=pipeline_confidence,
+            context=context,
+            created_at=datetime.now(),
+            past_sessions_used=len(past_sessions),
+            metadata={
+                "memory_dir": self._memory_dir,
+                "frameworks_applied": [f.value for f in recommended_frameworks],
+            },
         )
 
-        # ---- 5. Persist --------------------------------------------
+        # 4. Persist
         if self._session_repo:
             try:
                 self._session_repo.save_session(report.to_dict())
             except Exception as exc:
-                logger.warning("Could not persist session: %s", exc)
+                logger.warning("Could not save session: %s", exc)
 
         return report
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _build_business_context(self, context: Dict[str, Any]):
-        """Build a BusinessContext dataclass from a free-form context dict."""
-        from .aic_system import BusinessContext
-        return BusinessContext(
-            industry=context.get("industry", "general"),
-            company_size=context.get("company_size", "sme"),
-            market_position=context.get("market_position", "challenger"),
-            competitive_landscape=context.get("competitive_landscape", {}),
-            financial_health=context.get("financial_health", {}),
-            organizational_maturity=context.get("organizational_maturity", "developing"),
-            strategic_priorities=context.get("strategic_priorities", []),
-            stakeholder_map=context.get("stakeholder_map", {}),
-            cultural_context=context.get("cultural_context", ""),
-            regulatory_environment=context.get("regulatory_environment", {}),
-        )
-
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve a past session by ID (requires persistent storage)."""
+        self._ensure_init()
         if self._session_repo:
             return self._session_repo.get_session(session_id)
         return None
 
     def list_sessions(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """List recent sessions (requires persistent storage)."""
+        self._ensure_init()
         if self._session_repo:
             return self._session_repo.list_sessions(limit=limit)
         return []

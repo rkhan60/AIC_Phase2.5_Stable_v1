@@ -1,10 +1,7 @@
 """Pydantic request/response models for the AIC REST API."""
-
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -45,4 +42,3 @@ class SessionSummary(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     version: str = "5.0"
-    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())

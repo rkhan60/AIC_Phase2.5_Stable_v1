@@ -1,44 +1,51 @@
-import pandas as pd
-import numpy as np
-import time
-from typing import Dict, List, Optional, Union, Callable
-from dataclasses import dataclass
-from sklearn.base import BaseEstimator
-from concurrent.futures import ThreadPoolExecutor
-import queue
+"""agent_manager.py — central agent coordination and task routing."""
+
+from __future__ import annotations
+
 import logging
+import queue
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Union
+
+import numpy as np
+import pandas as pd
+from sklearn.base import BaseEstimator
 
 from .business_agents import BusinessRole, BusinessAgent
 from .enums import ConsultingRole, ReasoningType
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
 
 @dataclass
 class AgentTask:
-    """Structured task definition for agents"""
     task_id: str
     task_type: str
     input_data: Union[pd.DataFrame, Dict, str]
     priority: int = 1
-    dependencies: List[str] = None
-    metadata: Dict = None
+    dependencies: List[str] = field(default_factory=list)
+    metadata: Dict = field(default_factory=dict)
+
 
 @dataclass
 class AgentResult:
-    """Structured result from agent processing"""
     task_id: str
     agent_id: str
     output_data: Union[pd.DataFrame, Dict]
     insights: Dict
     confidence: float
     processing_time: float
-    metadata: Dict = None
+    metadata: Dict = field(default_factory=dict)
+
 
 class AgentCapability(Enum):
-    """Defines specific capabilities of agents"""
     MARKET_ANALYSIS = "market_analysis"
     FINANCIAL_MODELING = "financial_modeling"
     RISK_ASSESSMENT = "risk_assessment"
@@ -47,7 +54,6 @@ class AgentCapability(Enum):
     SUSTAINABILITY_ASSESSMENT = "sustainability_assessment"
     CHANGE_MANAGEMENT = "change_management"
     BUSINESS_DEVELOPMENT = "business_development"
-    # Analytics agent capabilities
     DATA_ANALYSIS = "data_analysis"
     VISUALIZATION = "visualization"
     CUSTOMER_MODELING = "customer_modeling"
@@ -55,8 +61,8 @@ class AgentCapability(Enum):
     BI_DEVELOPMENT = "bi_development"
     DATA_PIPELINE = "data_pipeline"
 
+
 class ModelType(Enum):
-    """Types of models that can be used by agents"""
     CLASSIFIER = "classifier"
     REGRESSOR = "regressor"
     CLUSTERING = "clustering"
@@ -64,333 +70,236 @@ class ModelType(Enum):
     NLP = "nlp"
     RECOMMENDATION = "recommendation"
 
+
+# ---------------------------------------------------------------------------
+# Agent profile
+# ---------------------------------------------------------------------------
+
 class AgentProfile:
-    """Defines agent capabilities and requirements"""
     def __init__(
         self,
         agent_id: str,
         role: BusinessRole,
         capabilities: List[AgentCapability],
-        models: Dict[ModelType, BaseEstimator] = None
+        models: Optional[Dict[ModelType, BaseEstimator]] = None,
     ):
         self.agent_id = agent_id
         self.role = role
         self.capabilities = capabilities
-        self.models = models or {}
+        self.models: Dict[ModelType, BaseEstimator] = models or {}
         self.performance_metrics = pd.DataFrame()
-        self.task_history = []
+        self.task_history: List[str] = []
 
     def can_handle(self, task_type: str) -> bool:
-        """Check if agent can handle specific task type"""
         return any(cap.value == task_type for cap in self.capabilities)
 
-    def update_performance(self, task_result: AgentResult):
-        """Update agent performance metrics"""
-        metrics = {
-            'task_id': task_result.task_id,
-            'processing_time': task_result.processing_time,
-            'confidence': task_result.confidence,
-            'timestamp': pd.Timestamp.now()
+    def update_performance(self, task_result: AgentResult) -> None:
+        row = {
+            "task_id": task_result.task_id,
+            "processing_time": task_result.processing_time,
+            "confidence": task_result.confidence,
+            "timestamp": pd.Timestamp.now(),
         }
-        self.performance_metrics = pd.concat([
-            self.performance_metrics,
-            pd.DataFrame([metrics])
-        ])
+        self.performance_metrics = pd.concat(
+            [self.performance_metrics, pd.DataFrame([row])],
+            ignore_index=True,
+        )
         self.task_history.append(task_result.task_id)
 
+
+# ---------------------------------------------------------------------------
+# Model manager
+# ---------------------------------------------------------------------------
+
 class ModelManager:
-    """Manages ML models and their assignments to agents"""
     def __init__(self):
         self.models: Dict[str, BaseEstimator] = {}
         self.model_metadata: Dict[str, Dict] = {}
-        
+
     def register_model(
         self,
         model_id: str,
         model: BaseEstimator,
         model_type: ModelType,
-        metadata: Dict = None
-    ):
-        """Register a new model"""
+        metadata: Optional[Dict] = None,
+    ) -> None:
         self.models[model_id] = model
         self.model_metadata[model_id] = {
-            'type': model_type,
-            'metadata': metadata or {},
-            'performance_metrics': {}
+            "type": model_type,
+            "metadata": metadata or {},
+            "performance_metrics": {},
         }
-        
-    def get_model(self, model_id: str) -> BaseEstimator:
-        """Get a registered model"""
+
+    def get_model(self, model_id: str) -> Optional[BaseEstimator]:
         return self.models.get(model_id)
-        
-    def update_model_metrics(self, model_id: str, metrics: Dict):
-        """Update model performance metrics"""
+
+    def update_model_metrics(self, model_id: str, metrics: Dict) -> None:
         if model_id in self.model_metadata:
-            self.model_metadata[model_id]['performance_metrics'].update(metrics)
+            self.model_metadata[model_id]["performance_metrics"].update(metrics)
+
+
+# ---------------------------------------------------------------------------
+# Insight pipeline
+# ---------------------------------------------------------------------------
 
 class InsightPipeline:
-    """Processes model predictions into business insights"""
     def __init__(self):
         self.transformers: Dict[str, Callable] = {}
-        self.insight_cache = {}
-        
-    def register_transformer(self, name: str, func: Callable):
-        """Register a new insight transformer"""
+        self.insight_cache: Dict[str, Any] = {}
+
+    def register_transformer(self, name: str, func: Callable) -> None:
         self.transformers[name] = func
-        
+
     def process_prediction(
         self,
         prediction: Union[pd.DataFrame, np.ndarray],
         transformer_name: str,
-        context: Dict = None
+        context: Optional[Dict] = None,
     ) -> Dict:
-        """Transform prediction into business insight"""
         if transformer_name not in self.transformers:
-            raise ValueError(f"Unknown transformer: {transformer_name}")
-            
+            return {"raw": str(prediction)}
         transformer = self.transformers[transformer_name]
         insight = transformer(prediction, context)
-        
-        # Cache insight
         cache_key = f"{transformer_name}_{hash(str(prediction))}"
         self.insight_cache[cache_key] = insight
-        
         return insight
 
+
+# ---------------------------------------------------------------------------
+# Agent manager
+# ---------------------------------------------------------------------------
+
 class AgentManager:
-    """Central manager for agent coordination and task routing"""
+    """Central manager for agent coordination and task routing."""
+
     def __init__(self):
         self.agents: Dict[str, AgentProfile] = {}
-        self.task_queue = queue.PriorityQueue()
+        self.task_queue: queue.PriorityQueue = queue.PriorityQueue()
         self.model_manager = ModelManager()
         self.insight_pipeline = InsightPipeline()
-        
-        # Task routing configuration
-        self.routing_rules = {
+
+        self.routing_rules: Dict[str, List[BusinessRole]] = {
             AgentCapability.MARKET_ANALYSIS.value: [
                 BusinessRole.MARKET_ANALYST,
-                BusinessRole.FINANCIAL_STRATEGIST
+                BusinessRole.FINANCIAL_STRATEGIST,
             ],
             AgentCapability.INNOVATION_EVALUATION.value: [
                 BusinessRole.INNOVATION_STRATEGIST,
-                BusinessRole.DIGITAL_TRANSFORMATION_EXPERT
+                BusinessRole.DIGITAL_TRANSFORMATION_EXPERT,
             ],
             AgentCapability.RISK_ASSESSMENT.value: [
                 BusinessRole.RISK_MANAGER,
-                BusinessRole.SUSTAINABILITY_CONSULTANT
+                BusinessRole.SUSTAINABILITY_CONSULTANT,
             ],
             AgentCapability.CHANGE_MANAGEMENT.value: [
                 BusinessRole.CHANGE_MANAGEMENT_SPECIALIST,
-                BusinessRole.BUSINESS_DEVELOPMENT_EXPERT
-            ]
+                BusinessRole.BUSINESS_DEVELOPMENT_EXPERT,
+            ],
         }
-        
-    def register_agent(self, agent: AgentProfile):
-        """Register a new agent"""
+
+    def register_agent(self, agent: AgentProfile) -> None:
         self.agents[agent.agent_id] = agent
-        logger.info(f"Registered agent: {agent.agent_id} with role {agent.role}")
-        
-    def submit_task(self, task: AgentTask):
-        """Submit a new task for processing"""
+        logger.info("Registered agent %s (role=%s)", agent.agent_id, agent.role)
+
+    def submit_task(self, task: AgentTask) -> None:
         self.task_queue.put((task.priority, task))
-        logger.info(f"Submitted task: {task.task_id} of type {task.task_type}")
-        
+        logger.info("Submitted task %s (type=%s)", task.task_id, task.task_type)
+
     def process_tasks(self, max_workers: int = 4) -> List[AgentResult]:
-        """Process tasks in parallel using available agents"""
-        results = []
-        
+        results: List[AgentResult] = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
-            
             while not self.task_queue.empty():
                 _, task = self.task_queue.get()
-                
-                # Find suitable agents
-                suitable_agents = self._find_suitable_agents(task.task_type)
-                if not suitable_agents:
-                    logger.warning(f"No suitable agents for task: {task.task_id}")
-                    continue
-                
-                # Submit task to each suitable agent
-                for agent in suitable_agents:
-                    future = executor.submit(self._process_task, task, agent)
-                    futures.append(future)
-            
-            # Collect results
+                for agent in self._find_suitable_agents(task.task_type):
+                    futures.append(executor.submit(self._process_task, task, agent))
             for future in futures:
                 result = future.result()
                 if result:
                     results.append(result)
-                    
         return results
-    
-    def _find_suitable_agents(self, task_type: str) -> List[AgentProfile]:
-        """Find agents suitable for task type"""
-        suitable_agents = []
-        
-        # Get roles for task type
-        roles = self.routing_rules.get(task_type, [])
-        
-        # Find agents with matching roles and capabilities
-        for agent in self.agents.values():
-            if agent.role in roles and agent.can_handle(task_type):
-                suitable_agents.append(agent)
-                
-        return suitable_agents
-    
-    def _process_task(self, task: AgentTask, agent: AgentProfile) -> Optional[AgentResult]:
-        """Process task using specified agent"""
-        try:
-            _task_start = time.time()
-            # Get appropriate model
-            model = self._get_model_for_task(task, agent)
 
-            # Process input data
+    def _find_suitable_agents(self, task_type: str) -> List[AgentProfile]:
+        roles = self.routing_rules.get(task_type, [])
+        return [
+            a for a in self.agents.values()
+            if a.role in roles and a.can_handle(task_type)
+        ]
+
+    def _process_task(self, task: AgentTask, agent: AgentProfile) -> Optional[AgentResult]:
+        try:
+            _start = time.time()
+            model = self._get_model_for_task(task, agent)
             prediction = model.predict(task.input_data)
-            
-            # Generate insights
             insights = self.insight_pipeline.process_prediction(
                 prediction,
                 f"{agent.role.value}_insights",
-                {'task_type': task.task_type}
+                {"task_type": task.task_type},
             )
-            
-            # Create result
             result = AgentResult(
                 task_id=task.task_id,
                 agent_id=agent.agent_id,
                 output_data=prediction,
                 insights=insights,
                 confidence=self._calculate_confidence(prediction, model),
-                processing_time=time.time() - _task_start,
-                metadata={'model_id': model.__class__.__name__}
+                processing_time=time.time() - _start,
+                metadata={"model_id": model.__class__.__name__},
             )
-            
-            # Update agent performance
             agent.update_performance(result)
-            
             return result
-            
-        except Exception as e:
-            logger.error(f"Error processing task {task.task_id} with agent {agent.agent_id}: {str(e)}")
+        except Exception as exc:
+            logger.error("Task %s failed for agent %s: %s", task.task_id, agent.agent_id, exc)
             return None
-    
+
     def _get_model_for_task(self, task: AgentTask, agent: AgentProfile) -> BaseEstimator:
-        """Return the best-matching model for the task's ModelType, falling back to the first available."""
-        if not agent.models:
-            raise ValueError(f"Agent {agent.agent_id} has no registered models")
-        # Prefer a model whose ModelType matches the task metadata
-        requested_type = (task.metadata or {}).get('model_type')
+        """Return the best model for the task, matched by ModelType if specified."""
+        requested_type = (task.metadata or {}).get("model_type")
         if requested_type:
             for model_type, model in agent.models.items():
                 if model_type.value == requested_type:
                     return model
         return next(iter(agent.models.values()))
 
-    def _calculate_confidence(self, prediction, model: Optional[BaseEstimator] = None) -> float:
-        """Return a confidence score for the prediction.
-
-        Uses predict_proba when available (classifiers), otherwise falls back
-        to a heuristic based on prediction variance.
-        """
+    def _calculate_confidence(
+        self,
+        prediction: Any,
+        model: Optional[BaseEstimator] = None,
+    ) -> float:
         try:
-            if model is not None and hasattr(model, 'predict_proba'):
-                import numpy as np
-                proba = model.predict_proba(prediction if hasattr(prediction, '__len__') else [[prediction]])
+            if model is not None and hasattr(model, "predict_proba"):
+                proba = model.predict_proba(
+                    prediction if hasattr(prediction, "__len__") else [prediction]
+                )
                 return float(np.max(proba))
         except Exception:
             pass
-        return 0.75  # Reasonable default when probabilities are unavailable
+        return 0.75
+
+
+# ---------------------------------------------------------------------------
+# Inter-agent messaging
+# ---------------------------------------------------------------------------
 
 class AgentMessaging:
-    """Handles inter-agent communication"""
     def __init__(self):
-        self.message_queue = queue.Queue()
+        self.message_queue: queue.Queue = queue.Queue()
         self.subscriptions: Dict[str, List[str]] = {}
-        
-    def send_message(self, from_agent: str, to_agent: str, message: Dict):
-        """Send message between agents"""
-        self.message_queue.put({
-            'from': from_agent,
-            'to': to_agent,
-            'content': message,
-            'timestamp': pd.Timestamp.now()
-        })
-        
-    def subscribe(self, agent_id: str, message_type: str):
-        """Subscribe agent to message type"""
-        if message_type not in self.subscriptions:
-            self.subscriptions[message_type] = []
-        self.subscriptions[message_type].append(agent_id)
-        
-    def process_messages(self):
-        """Process all pending messages"""
+
+    def send_message(self, from_agent: str, to_agent: str, message: Dict) -> None:
+        self.message_queue.put({"from": from_agent, "to": to_agent, "content": message})
+
+    def subscribe(self, agent_id: str, message_type: str) -> None:
+        self.subscriptions.setdefault(message_type, []).append(agent_id)
+
+    def get_messages(self, agent_id: str) -> List[Dict]:
+        messages: List[Dict] = []
+        tmp: queue.Queue = queue.Queue()
         while not self.message_queue.empty():
-            message = self.message_queue.get()
-            
-            # Handle subscriptions
-            message_type = message['content'].get('type')
-            if message_type in self.subscriptions:
-                for subscriber in self.subscriptions[message_type]:
-                    if subscriber != message['from']:
-                        # Notify subscriber
-                        logger.info(f"Notifying {subscriber} about {message_type}")
-
-# Example usage and guidelines:
-"""
-Modular Design Guidelines:
-
-1. Agent Implementation:
-   - Create agents as classes inheriting from BusinessAgent
-   - Implement required interfaces: process_task, get_capabilities
-   - Use type hints and documentation
-   - Include error handling and logging
-
-2. Model Integration:
-   - Register models with ModelManager
-   - Use sklearn-compatible interfaces
-   - Include model metadata and versioning
-   - Implement model update mechanisms
-
-3. Task Processing:
-   - Define clear task types and priorities
-   - Include task dependencies and metadata
-   - Implement retry mechanisms
-   - Add timeout handling
-
-4. Insight Generation:
-   - Create modular insight transformers
-   - Include validation rules
-   - Implement caching mechanisms
-   - Add insight confidence scores
-
-5. Scaling Considerations:
-   - Use async processing where appropriate
-   - Implement batch processing
-   - Add load balancing
-   - Include monitoring and metrics
-
-Example:
-
-# Create agent manager
-agent_manager = AgentManager()
-
-# Register agents
-market_agent = AgentProfile(
-    agent_id="market_1",
-    role=BusinessRole.MARKET_ANALYST,
-    capabilities=[AgentCapability.MARKET_ANALYSIS]
-)
-agent_manager.register_agent(market_agent)
-
-# Submit task
-task = AgentTask(
-    task_id="task_1",
-    task_type=AgentCapability.MARKET_ANALYSIS.value,
-    input_data=pd.DataFrame(...)
-)
-agent_manager.submit_task(task)
-
-# Process tasks
-results = agent_manager.process_tasks()
-""" 
+            msg = self.message_queue.get()
+            if msg["to"] == agent_id:
+                messages.append(msg)
+            else:
+                tmp.put(msg)
+        while not tmp.empty():
+            self.message_queue.put(tmp.get())
+        return messages

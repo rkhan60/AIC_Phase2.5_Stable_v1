@@ -1,6 +1,6 @@
 from .enums import ConsultingRole, ReasoningType
 from .logic_engine import (
-    AICConsultingModel,          # backward-compat alias for ConsultingFrameworkEngine
+    AICConsultingModel,
     ConsultingFrameworkEngine,
     BusinessContext,
     create_aic_system,
@@ -17,16 +17,16 @@ from .parallel_processor import (
 )
 
 __all__ = [
-    'AICConsultingModel',
-    'ConsultingFrameworkEngine',
-    'BusinessContext',
-    'ConsultingRole',
-    'ReasoningType',
-    'create_aic_system',
-    'BusinessRole',
-    'BusinessAgent',
-    'BusinessAgentManager',
-    'AgentDiagnostics',
-    'ParallelAgentProcessor',
-    'AgentGroup',
+    "AICConsultingModel",
+    "ConsultingFrameworkEngine",
+    "BusinessContext",
+    "ConsultingRole",
+    "ReasoningType",
+    "create_aic_system",
+    "BusinessRole",
+    "BusinessAgent",
+    "BusinessAgentManager",
+    "AgentDiagnostics",
+    "ParallelAgentProcessor",
+    "AgentGroup",
 ]

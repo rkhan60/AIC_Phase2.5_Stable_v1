@@ -1,5 +1,4 @@
 """AIC REST API — FastAPI application."""
-
 from __future__ import annotations
 
 import logging
@@ -21,13 +20,8 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# App lifecycle
-# ---------------------------------------------------------------------------
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Warm up the consulting service so the first request isn't slow.
     logger.info("Warming up ConsultingService…")
     get_consulting_service()
     logger.info("ConsultingService ready.")
@@ -49,29 +43,15 @@ app.add_middleware(
 )
 
 
-# ---------------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------------
-
 @app.get("/api/v1/health", response_model=HealthResponse, tags=["system"])
 def health():
-    return HealthResponse(status="ok", timestamp=datetime.now().isoformat())
+    return HealthResponse(status="ok")
 
-
-# ---------------------------------------------------------------------------
-# Analysis
-# ---------------------------------------------------------------------------
 
 @app.post("/api/v1/analyze", response_model=AnalyzeResponse, tags=["consulting"])
-def analyze(
-    request: AnalyzeRequest,
-    svc=Depends(get_consulting_service),
-):
+def analyze(request: AnalyzeRequest, svc=Depends(get_consulting_service)):
     """Run a full consulting analysis and return a structured report."""
-    context = {}
-    if request.context:
-        context = request.context.model_dump()
-
+    context = request.context.model_dump() if request.context else {}
     try:
         report = svc.analyze(request.problem, context)
     except ValueError as exc:
@@ -95,16 +75,8 @@ def analyze(
     )
 
 
-# ---------------------------------------------------------------------------
-# Sessions
-# ---------------------------------------------------------------------------
-
 @app.get("/api/v1/sessions", response_model=List[SessionSummary], tags=["sessions"])
-def list_sessions(
-    limit: int = 20,
-    svc=Depends(get_consulting_service),
-):
-    """List the most recent consulting sessions."""
+def list_sessions(limit: int = 20, svc=Depends(get_consulting_service)):
     sessions = svc.list_sessions(limit=limit)
     return [
         SessionSummary(
@@ -119,23 +91,27 @@ def list_sessions(
 
 
 @app.get("/api/v1/sessions/{session_id}", response_model=AnalyzeResponse, tags=["sessions"])
-def get_session(
-    session_id: str,
-    svc=Depends(get_consulting_service),
-):
-    """Retrieve a single session by ID."""
+def get_session(session_id: str, svc=Depends(get_consulting_service)):
     session = svc.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found.")
-    return AnalyzeResponse(**{
-        k: session.get(k, v)
-        for k, v in AnalyzeResponse.model_fields.items()
-    } | {"session_id": session["session_id"]})
+    return AnalyzeResponse(
+        session_id=session["session_id"],
+        problem=session.get("problem", ""),
+        reasoning_summary=session.get("reasoning_summary", ""),
+        validation_status=session.get("validation_status", "unknown"),
+        critique_summary=session.get("critique_summary", ""),
+        critique_score=session.get("critique_score", 0.0),
+        framework_analyses=session.get("framework_analyses", {}),
+        recommended_frameworks=session.get("recommended_frameworks", []),
+        confidence=session.get("confidence", 0.0),
+        past_sessions_used=session.get("past_sessions_used", 0),
+        created_at=session.get("created_at", ""),
+    )
 
 
 @app.get("/api/v1/memory/stats", tags=["system"])
 def memory_stats(svc=Depends(get_consulting_service)):
-    """Return high-level storage stats."""
     sessions = svc.list_sessions(limit=1000)
     return {
         "total_sessions": len(sessions),

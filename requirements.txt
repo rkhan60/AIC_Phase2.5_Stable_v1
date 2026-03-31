@@ -24,7 +24,7 @@ tableauserverclient>=0.17.0
 # Utilities
 python-dotenv>=1.0.0
 
-# Machine Learning
+# Machine Learning (CPU only — no PyTorch in core pipeline)
 scikit-learn>=1.0.0
 xgboost>=1.5.0
 lightgbm>=3.3.0

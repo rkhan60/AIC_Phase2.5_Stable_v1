@@ -1,5 +1,4 @@
 """SQLite database manager for AIC persistent storage."""
-
 from __future__ import annotations
 
 import sqlite3
@@ -26,7 +25,6 @@ CREATE TABLE IF NOT EXISTS consulting_sessions (
     metadata        TEXT,
     created_at      TEXT
 );
-
 CREATE TABLE IF NOT EXISTS memories (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     key             TEXT NOT NULL,
@@ -36,7 +34,6 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at      TEXT DEFAULT (datetime('now')),
     accessed_at     TEXT DEFAULT (datetime('now'))
 );
-
 CREATE TABLE IF NOT EXISTS episodes (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id      TEXT,
@@ -54,7 +51,6 @@ class DatabaseManager:
     def __init__(self, db_path: str):
         self._db_path = db_path
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        logger.debug("DatabaseManager initialised at %s", db_path)
 
     def create_tables(self) -> None:
         """Create all required tables (idempotent)."""
@@ -64,7 +60,7 @@ class DatabaseManager:
 
     @contextmanager
     def get_connection(self) -> Generator[sqlite3.Connection, None, None]:
-        """Context manager that yields an auto-committing connection."""
+        """Yield an auto-committing connection."""
         conn = sqlite3.connect(self._db_path)
         conn.row_factory = sqlite3.Row
         try:

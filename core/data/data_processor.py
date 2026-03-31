@@ -1,239 +1,137 @@
-import pandas as pd
-from typing import Dict, List, Optional, Union
+"""data_processor.py — company data processing without PyTorch tensors."""
+
+from __future__ import annotations
+
 import json
-import numpy as np
+import logging
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+
+import numpy as np
+import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 try:
-    import dask.dataframe as dd
+    import dask.dataframe as dd  # optional dependency
     _DASK_AVAILABLE = True
 except ImportError:
     _DASK_AVAILABLE = False
 
+
 class CompanyDataProcessor:
-    """Processes company data for AI consulting analysis"""
-    def __init__(self):
-        self.required_fields = {
-            'financial': ['revenue', 'costs', 'profit_margins', 'growth_rate'],
-            'operational': ['employees', 'locations', 'capacity_utilization'],
-            'market': ['market_share', 'competitors', 'target_segments'],
-            'strategic': ['current_initiatives', 'challenges', 'objectives']
-        }
-        
+    """Processes company data for AI consulting analysis."""
+
+    _REQUIRED_FIELDS = {
+        "financial": ["revenue", "costs", "profit_margins", "growth_rate"],
+        "operational": ["employees", "locations", "capacity_utilization"],
+        "market": ["market_share", "competitors", "target_segments"],
+        "strategic": ["current_initiatives", "challenges", "objectives"],
+    }
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
     def validate_data(self, data: Union[Dict, List[Dict]]) -> bool:
-        """Validate if all required fields are present"""
-        if isinstance(data, dict) and 'datasets' in data:
-            # Handle multiple datasets
-            for dataset in data['datasets']:
-                if not self._validate_single_dataset(dataset):
-                    return False
-            return True
-        else:
-            # Single dataset
-            return self._validate_single_dataset(data)
-    
-    def _validate_single_dataset(self, data: Dict) -> bool:
-        """Validate a single dataset"""
+        if isinstance(data, dict) and "datasets" in data:
+            return all(self._validate_single(ds) for ds in data["datasets"])
+        return self._validate_single(data)
+
+    def _validate_single(self, data: Dict) -> bool:
         try:
-            for category, fields in self.required_fields.items():
+            for category, fields in self._REQUIRED_FIELDS.items():
                 if category not in data:
-                    print(f"Missing category: {category}")
+                    logger.warning("Missing category: %s", category)
                     return False
-                for field in fields:
-                    if field not in data[category]:
-                        print(f"Missing field in {category}: {field}")
+                for f in fields:
+                    if f not in data[category]:
+                        logger.warning("Missing field %s in %s", f, category)
                         return False
             return True
-        except Exception as e:
-            print(f"Validation error: {str(e)}")
+        except Exception as exc:
+            logger.error("Validation error: %s", exc)
             return False
-    
+
+    # ------------------------------------------------------------------
+    # Processing — returns plain dicts instead of torch.Tensor
+    # ------------------------------------------------------------------
+
     def process_financial_data(self, financial_data: Dict) -> Dict[str, float]:
-        """Convert financial data to a plain dict of floats."""
         result: Dict[str, float] = {}
-        for field in self.required_fields['financial']:
-            value = financial_data.get(field, 0)
+        for f in self._REQUIRED_FIELDS["financial"]:
+            value = financial_data.get(f, 0)
             if isinstance(value, str):
                 try:
-                    value = float(value.replace(',', '').replace('$', ''))
+                    value = float(value.replace(",", "").replace("$", ""))
                 except ValueError:
                     value = 0.0
-            result[field] = float(value)
+            result[f] = float(value)
         return result
 
     def process_market_data(self, market_data: Dict) -> Dict[str, float]:
-        """Process market-related information into a plain dict."""
+        share_raw = str(market_data.get("market_share", "0")).rstrip("%")
+        try:
+            market_share = float(share_raw) / 100
+        except ValueError:
+            market_share = 0.0
+
         return {
-            'market_share': float(str(market_data.get('market_share', 0)).rstrip('%')) / 100,
-            'competitor_count': float(len(market_data.get('competitors', []))),
-            'segment_count': float(len(market_data.get('target_segments', []))),
+            "market_share": market_share,
+            "competitor_count": float(len(market_data.get("competitors", []))),
+            "segment_count": float(len(market_data.get("target_segments", []))),
         }
 
-    def process_company_data(self, file_path: str) -> Dict[str, Dict]:
-        """Process complete company data file and return plain dicts."""
-        with open(file_path, 'r') as f:
-            data = json.load(f)
-        if not self.validate_data(data):
-            raise ValueError("Invalid data format")
+    def process_company_data(self, company_data: Dict) -> Dict[str, Dict]:
         return {
-            'financial': self.process_financial_data(data['financial']),
-            'market': self.process_market_data(data['market']),
-            'operational': {
-                'employees': float(data['operational'].get('employees', 0)),
-                'location_count': float(len(data['operational'].get('locations', []))),
-                'capacity_utilization': float(
-                    str(data['operational'].get('capacity_utilization', 0)).rstrip('%')
-                ) / 100,
-            },
-            'strategic': self.process_strategic_data(data['strategic']),
+            "financial": self.process_financial_data(company_data.get("financial", {})),
+            "market": self.process_market_data(company_data.get("market", {})),
         }
 
     def process_strategic_data(self, strategic_data: Dict) -> Dict[str, int]:
-        """Process strategic information into plain counts."""
         return {
-            'initiative_count': len(strategic_data.get('current_initiatives', [])),
-            'challenge_count': len(strategic_data.get('challenges', [])),
-            'objective_count': len(strategic_data.get('objectives', [])),
+            "initiative_count": len(strategic_data.get("current_initiatives", [])),
+            "challenge_count": len(strategic_data.get("challenges", [])),
+            "objective_count": len(strategic_data.get("objectives", [])),
         }
-    
-    def get_data_template(self) -> Dict:
-        """Return template for required company data"""
+
+    # ------------------------------------------------------------------
+    # File I/O helpers
+    # ------------------------------------------------------------------
+
+    def load_data(self, file_path: Union[str, Path]) -> pd.DataFrame:
+        path = Path(file_path)
+        if path.suffix.lower() == ".csv":
+            if _DASK_AVAILABLE:
+                return dd.read_csv(str(path)).compute()
+            return pd.read_csv(path)
+        if path.suffix.lower() in (".xlsx", ".xls"):
+            return pd.read_excel(path)
+        raise ValueError(f"Unsupported file type: {path.suffix}")
+
+    def process_data(self, data: pd.DataFrame) -> Dict[str, Any]:
         return {
-            'financial': {field: '' for field in self.required_fields['financial']},
-            'operational': {field: '' for field in self.required_fields['operational']},
-            'market': {field: '' for field in self.required_fields['market']},
-            'strategic': {field: '' for field in self.required_fields['strategic']}
+            "shape": list(data.shape),
+            "columns": list(data.columns),
+            "summary": data.describe(include="all").to_dict(),
+            "null_counts": data.isnull().sum().to_dict(),
         }
-    
-    def process_large_dataset(self, data: Union[Dict, List[Dict]], processing_mode: str = "Standard") -> Dict:
-        """Process large datasets efficiently"""
-        try:
-            if isinstance(data, dict) and 'datasets' in data:
-                # Multiple datasets
-                processed_data = []
-                for dataset in data['datasets']:
-                    processed = self._process_single_dataset(dataset, processing_mode)
-                    processed_data.append(processed)
-                return self._combine_processed_data(processed_data)
-            else:
-                # Single dataset
-                return self._process_single_dataset(data, processing_mode)
-        except Exception as e:
-            print(f"Error processing large dataset: {str(e)}")
-            return {}
-    
-    def _process_single_dataset(self, data: Dict, processing_mode: str) -> Dict:
-        """Process a single dataset based on processing mode"""
-        try:
-            if processing_mode == "Memory Efficient" and _DASK_AVAILABLE:
-                # Use Dask for memory-efficient processing
-                df = dd.from_pandas(pd.DataFrame([data]), npartitions=1)
-                processed = df.map_partitions(self._process_partition).compute()
-                return processed.to_dict('records')[0]
-            elif processing_mode == "Memory Efficient":
-                return self._standard_processing(data)
-            elif processing_mode == "High Performance":
-                # Use parallel processing with larger chunks
-                return self._high_performance_processing(data)
-            else:
-                # Standard processing
-                return self._standard_processing(data)
-        except Exception as e:
-            print(f"Error in single dataset processing: {str(e)}")
-            return {}
-    
-    def _process_partition(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Process a partition of data"""
-        # Process each category
-        for category in self.required_fields.keys():
-            if category in df.columns:
-                df[f"{category}_processed"] = df[category].apply(self._process_category)
-        return df
-    
-    def _process_category(self, category_data: Dict) -> Dict:
-        """Process a single category of data"""
-        processed = {}
-        for field, value in category_data.items():
-            if isinstance(value, (int, float)):
-                processed[field] = value
-            elif isinstance(value, str):
-                try:
-                    processed[field] = float(value.replace(',', '').replace('$', ''))
-                except ValueError:
-                    processed[field] = value
-            elif isinstance(value, list):
-                processed[field] = value
-            else:
-                processed[field] = str(value)
-        return processed
-    
-    def _high_performance_processing(self, data: Dict) -> Dict:
-        """High-performance processing using numpy arrays"""
-        processed = {}
-        for category, fields in self.required_fields.items():
-            if category in data:
-                category_data = data[category]
-                if isinstance(category_data, dict):
-                    # Convert numerical data to numpy arrays for faster processing
-                    numerical_fields = {
-                        field: value for field, value in category_data.items()
-                        if isinstance(value, (int, float))
-                    }
-                    if numerical_fields:
-                        arr = np.array(list(numerical_fields.values()))
-                        # Apply any necessary transformations
-                        processed[category] = {
-                            field: value for field, value in zip(numerical_fields.keys(), arr)
-                        }
-                    # Keep non-numerical data as is
-                    processed[category].update({
-                        field: value for field, value in category_data.items()
-                        if not isinstance(value, (int, float))
-                    })
-        return processed
-    
-    def _standard_processing(self, data: Dict) -> Dict:
-        """Standard processing for moderate-sized data"""
-        processed = {}
-        for category, fields in self.required_fields.items():
-            if category in data:
-                processed[category] = self._process_category(data[category])
-        return processed
-    
-    def _combine_processed_data(self, processed_data: List[Dict]) -> Dict:
-        """Combine multiple processed datasets"""
-        combined = {
-            'financial': {},
-            'operational': {},
-            'market': {},
-            'strategic': {}
-        }
-        
-        # Combine numerical data
-        for category in self.required_fields.keys():
-            numerical_fields = []
-            non_numerical_fields = {}
-            
-            for data in processed_data:
-                if category in data:
-                    for field, value in data[category].items():
-                        if isinstance(value, (int, float)):
-                            numerical_fields.append(value)
-                        else:
-                            if field not in non_numerical_fields:
-                                non_numerical_fields[field] = []
-                            non_numerical_fields[field].append(value)
-            
-            # Average numerical fields
-            if numerical_fields:
-                combined[category]['average'] = np.mean(numerical_fields)
-                combined[category]['std'] = np.std(numerical_fields)
-                combined[category]['min'] = np.min(numerical_fields)
-                combined[category]['max'] = np.max(numerical_fields)
-            
-            # Combine non-numerical fields
-            for field, values in non_numerical_fields.items():
-                combined[category][field] = list(set(
-                    item for sublist in values 
-                    for item in (sublist if isinstance(sublist, list) else [sublist])
-                )) 
+
+    def save_results(self, results: Any, output_path: Union[str, Path]) -> None:
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(results, fh, indent=2, default=str)
+        logger.info("Results saved to %s", path)
+
+    def generate_visualization(self, results: Any, output_path: Union[str, Path]) -> None:
+        """Write a minimal HTML report (no Plotly dependency required at this layer)."""
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        html = (
+            "<html><body><h1>AIC Analysis Report</h1>"
+            f"<pre>{json.dumps(results, indent=2, default=str)}</pre>"
+            "</body></html>"
+        )
+        path.write_text(html, encoding="utf-8")
+        logger.info("Visualization saved to %s", path)

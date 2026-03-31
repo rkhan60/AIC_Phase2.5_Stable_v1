@@ -1,199 +1,132 @@
-"""AIC — main entry point."""
+"""AIC — AI Consulting System entry point."""
+from __future__ import annotations
 
-from pathlib import Path
 import sys
-import os
+from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Bootstrap
-# ---------------------------------------------------------------------------
 
 def setup_environment() -> Path:
-    """Create required directories."""
-    dirs = [
-        'data/raw', 'data/processed', 'output/reports',
-        'output/visualizations', 'memory',
-    ]
-    base_dir = Path(__file__).parent
-    for d in dirs:
-        (base_dir / d).mkdir(parents=True, exist_ok=True)
-    return base_dir
+    base = Path(__file__).parent
+    for d in ["data/raw", "data/processed", "output/reports", "output/visualizations", "memory"]:
+        (base / d).mkdir(parents=True, exist_ok=True)
+    return base
 
 
-# ---------------------------------------------------------------------------
-# Menu actions
-# ---------------------------------------------------------------------------
+def run_consulting_analysis(base: Path) -> None:
+    from core.consulting_service import ConsultingService
 
-def run_consulting_analysis():
-    """Interactively run a consulting analysis."""
-    print("\n=== Consulting Analysis ===")
-    problem = input("Describe your business problem:\n> ").strip()
-    if not problem:
-        print("❌ No problem entered.")
+    svc = ConsultingService(
+        memory_dir=str(base / "memory"),
+        db_path=str(base / "data" / "aic.db"),
+    )
+
+    print("\nDescribe your business problem (or 'back' to return):")
+    try:
+        problem = input("> ").strip()
+    except (KeyboardInterrupt, EOFError):
+        return
+    if not problem or problem.lower() in ("back", "exit"):
         return
 
     print("\nOptional context (press Enter to skip each):")
-    industry = input("  Industry (e.g. retail, SaaS): ").strip() or "general"
-    company_size = input("  Company size (micro/sme/mid-market/enterprise): ").strip() or "sme"
-    market_position = input("  Market position (leader/challenger/follower/niche): ").strip() or "challenger"
+    industry = input("  Industry [general]: ").strip() or "general"
+    company_size = input("  Company size [sme]: ").strip() or "sme"
+    market_position = input("  Market position [challenger]: ").strip() or "challenger"
 
-    context = {
-        "industry": industry,
-        "company_size": company_size,
-        "market_position": market_position,
-    }
-
-    print("\nInitialising consulting service (this may take a moment on first run)…")
-    from core.consulting_service import ConsultingService
-    db_path = str(Path(__file__).parent / "data" / "aic.db")
-    svc = ConsultingService(memory_dir="memory", db_path=db_path)
-
-    print("Running analysis…")
+    print("\nRunning analysis...")
     try:
-        report = svc.analyze(problem, context)
+        report = svc.analyze(problem, {
+            "industry": industry,
+            "company_size": company_size,
+            "market_position": market_position,
+        })
     except Exception as exc:
-        print(f"\n❌ Analysis failed: {exc}")
+        print(f"\nError: {exc}")
         return
 
-    # --- Display results ---
     print("\n" + "=" * 60)
-    print(f"Session: {report.session_id}")
-    print(f"Confidence: {report.confidence:.0%}")
+    print(f"Session   : {report.session_id}")
+    print(f"Confidence: {report.confidence:.0%}  |  Validation: {report.validation_status}")
     if report.past_sessions_used:
         print(f"(informed by {report.past_sessions_used} similar past session(s))")
-
     print("\n--- Reasoning ---")
     print(report.reasoning_summary)
-    print(f"Validation: {report.validation_status}")
-
-    print("\n--- Self-Critique ---")
+    print("\n--- Critique ---")
     print(report.critique_summary)
-
     if report.recommended_frameworks:
         print("\n--- Recommended Frameworks ---")
         for fw in report.recommended_frameworks:
-            print(f"  • {fw}")
-
-    print("\n--- Framework Analyses ---")
-    for fw_name, analysis in report.framework_analyses.items():
-        print(f"\n  [{fw_name.upper()}]")
-        if isinstance(analysis, dict):
-            for k, v in analysis.items():
-                if k not in ("framework", "problem"):
-                    print(f"    {k}: {v}")
-        else:
-            print(f"    {analysis}")
-
-    print("\n" + "=" * 60)
-    print("✓ Analysis complete.")
+            print(f"  * {fw}")
+    print("=" * 60)
 
 
-def run_diagnostics():
-    """Check that all core components are present."""
-    print("\nRunning system diagnostics…")
-    base_dir = Path(__file__).parent
+def run_diagnostics() -> None:
+    print("\nRunning system diagnostics...")
+    base = Path(__file__).parent
     components = [
-        ('Consulting Service', 'core/consulting_service.py'),
-        ('Pipeline Autonomy', 'core/pipeline_autonomy.py'),
-        ('AIC System', 'core/aic_system.py'),
-        ('Config', 'core/config.py'),
-        ('Data Processor', 'core/data/data_processor.py'),
-        ('Interface', 'core/interface/launch_aic.py'),
-        ('Web Controller', 'core/web_automation/web_controller.py'),
+        ("Logic Engine", "core/engine/logic_engine.py"),
+        ("AIC System", "core/aic_system.py"),
+        ("Consulting Service", "core/consulting_service.py"),
+        ("Data Processor", "core/data/data_processor.py"),
+        ("Storage", "core/storage/__init__.py"),
+        ("REST API", "api/main.py"),
+        ("Streamlit App", "app/streamlit_app.py"),
     ]
     all_ok = True
     for name, path in components:
-        exists = (base_dir / path).exists()
-        print(f"{'✓' if exists else '❌'} {name}: {'OK' if exists else f'Missing ({path})'}")
-        all_ok = all_ok and exists
-
-    # Import check
-    try:
-        from core.engine import create_aic_system, ConsultingFrameworkEngine
-        print("✓ Engine imports: OK")
-    except Exception as exc:
-        print(f"❌ Engine imports failed: {exc}")
-        all_ok = False
-
-    print("\n✓ All components present." if all_ok else "\n❌ Some components are missing.")
+        ok = (base / path).exists()
+        print(f"{'OK' if ok else 'MISSING':8s}  {name}")
+        all_ok = all_ok and ok
+    print("\nAll components present." if all_ok else "\nSome components missing.")
 
 
-def run_web_automation():
-    """Run web automation tasks."""
-    print("\n=== Web Automation Menu ===")
-    print("1. Smart Web Search")
-    print("2. Add Allowed Domain")
-    print("3. View Allowed Domains")
-    print("4. Back to Main Menu")
-
+def run_web_automation() -> None:
     try:
         from core.web_automation.web_controller import WebController
-        web_controller = WebController()
-    except Exception as exc:
-        print(f"❌ Web controller unavailable: {exc}")
-        return
-
-    choice = input("\nSelect an option (1-4): ").strip()
-
-    if choice == '1':
-        query = input("Enter search query: ").strip()
-        num_results = int(input("Number of results (default 5): ").strip() or "5")
-        results = web_controller.smart_search(query, num_results)
-        print(f"\nFound {len(results)} results.")
+        wc = WebController()
+        query = input("Search query: ").strip()
+        if not query:
+            return
+        results = wc.smart_search(query, 3)
         for i, r in enumerate(results, 1):
-            a = r.get('analysis', {})
-            print(f"\n{i}. {r.get('title', '')}")
-            print(f"   Score: {a.get('relevance_score', 0):.2f}")
-            for pt in a.get('key_points', [])[:3]:
+            print(f"\n{i}. {r.get('title', 'N/A')}")
+            for pt in r.get("analysis", {}).get("key_points", [])[:2]:
                 print(f"   - {pt}")
-    elif choice == '2':
-        domain = input("Domain to allow: ").strip()
-        web_controller.add_allowed_domain(domain)
-        print(f"✓ Added {domain}")
-    elif choice == '3':
-        for d in web_controller.allowed_domains.get("allowed", []):
-            print(f"  - {d}")
+    except Exception as exc:
+        print(f"Web automation unavailable: {exc}")
 
-
-# ---------------------------------------------------------------------------
-# Main menu
-# ---------------------------------------------------------------------------
 
 def main() -> int:
-    print("\n=== AI Consulting System ===")
-    print("1. Launch Analysis Interface (CLI)")
-    print("2. Run Consulting Analysis")
+    base = setup_environment()
+    print("\n=== AIC — AI Consulting System ===")
+    print("1. Launch Streamlit Interface")
+    print("2. Run Consulting Analysis (CLI)")
     print("3. Run Diagnostics")
     print("4. Web Automation")
     print("5. Exit")
 
     try:
         choice = input("\nSelect an option (1-5): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print("\nExiting.")
+        return 0
 
-        if choice == '1':
-            from core.interface.launch_aic import main as launch_interface
-            launch_interface()
-        elif choice == '2':
-            run_consulting_analysis()
-        elif choice == '3':
-            run_diagnostics()
-        elif choice == '4':
-            run_web_automation()
-        elif choice == '5':
-            print("\nExiting…")
-            sys.exit(0)
-        else:
-            print("\n❌ Invalid option.")
-
-    except KeyboardInterrupt:
-        print("\nInterrupted.")
-    except Exception as exc:
-        print(f"\n❌ Error: {exc}")
-        return 1
+    if choice == "1":
+        import subprocess
+        subprocess.run([sys.executable, "-m", "streamlit", "run", "app/streamlit_app.py"])
+    elif choice == "2":
+        run_consulting_analysis(base)
+    elif choice == "3":
+        run_diagnostics()
+    elif choice == "4":
+        run_web_automation()
+    elif choice == "5":
+        print("Goodbye.")
+    else:
+        print("Invalid option.")
 
     return 0
 
 
 if __name__ == "__main__":
-    setup_environment()
     sys.exit(main())

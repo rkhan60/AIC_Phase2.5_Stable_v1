@@ -370,5 +370,5 @@ class ConsultingFrameworkEngine:
 # ---------------------------------------------------------------------------
 
 def create_aic_system() -> "ConsultingFrameworkEngine":
-    """Return a ready-to-use ConsultingFrameworkEngine instance."""
+    """Return a fresh ConsultingFrameworkEngine (no cross-module delegation)."""
     return ConsultingFrameworkEngine()

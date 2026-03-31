@@ -7,7 +7,6 @@ __pycache__/
 *.tar.gz
 output/
 data/raw/
-models/
 .env
 *.log
 .DS_Store

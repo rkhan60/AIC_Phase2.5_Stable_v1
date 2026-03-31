@@ -1,38 +1,20 @@
-"""logic_engine — backward-compatibility shim.
+"""logic_engine.py — thin compatibility shim.
 
-The original file contained ~1 767 lines of untrained PyTorch neural-network
-classes (AICConsultingModel, ReasoningEngine, ConsultingMemorySystem, etc.)
-that were never called with real weights and produced no meaningful output.
-
-This shim preserves every public name that was imported elsewhere so the rest
-of the codebase continues to work without changes:
-
-    from core.engine.logic_engine import AICConsultingModel, create_aic_system
-    from core.engine.logic_engine import ConsultingRole, ReasoningType
+All real implementation lives in core/aic_system.py and core/engine/enums.py.
+This module re-exports everything so existing import paths keep working.
 """
-
-from .enums import ConsultingRole, ReasoningType  # noqa: F401  (re-exported)
-
-from ..aic_system import (  # noqa: F401  (re-exported)
+from .enums import ConsultingRole, ReasoningType
+from ..aic_system import (
     BusinessIntelligenceType,
     ConsultingFramework,
     BusinessContext,
     ConsultingFrameworkEngine,
-    create_aic_system,
 )
 
-# Backward-compat alias: callers that do `AICConsultingModel()` now get a
-# ConsultingFrameworkEngine instance instead of crashing on missing PyTorch
-# weights.
+# Backward-compat alias used in a few places
 AICConsultingModel = ConsultingFrameworkEngine
 
-__all__ = [
-    "ConsultingRole",
-    "ReasoningType",
-    "BusinessIntelligenceType",
-    "ConsultingFramework",
-    "BusinessContext",
-    "ConsultingFrameworkEngine",
-    "AICConsultingModel",
-    "create_aic_system",
-]
+
+def create_aic_system() -> ConsultingFrameworkEngine:
+    """Return a fresh ConsultingFrameworkEngine instance."""
+    return ConsultingFrameworkEngine()
