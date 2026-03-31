@@ -1,11 +1,14 @@
 import pandas as pd
-import torch
 from typing import Dict, List, Optional, Union
 import json
 import numpy as np
 from pathlib import Path
-import dask.dataframe as dd
-import dask.array as da
+
+try:
+    import dask.dataframe as dd
+    _DASK_AVAILABLE = True
+except ImportError:
+    _DASK_AVAILABLE = False
 
 class CompanyDataProcessor:
     """Processes company data for AI consulting analysis"""
@@ -45,80 +48,53 @@ class CompanyDataProcessor:
             print(f"Validation error: {str(e)}")
             return False
     
-    def process_financial_data(self, financial_data: Dict) -> torch.Tensor:
-        """Convert financial data to tensor format"""
-        try:
-            financial_metrics = []
-            for field in self.required_fields['financial']:
-                value = financial_data.get(field, 0)
-                if isinstance(value, str):
-                    try:
-                        value = float(value.replace(',', '').replace('$', ''))
-                    except ValueError:
-                        value = 0
-                financial_metrics.append(value)
-            return torch.tensor(financial_metrics, dtype=torch.float32)
-        except Exception as e:
-            print(f"Error processing financial data: {str(e)}")
-            return torch.zeros(len(self.required_fields['financial']), dtype=torch.float32)
-    
-    def process_market_data(self, market_data: Dict) -> torch.Tensor:
-        """Process market-related information"""
-        market_metrics = []
-        # Convert market share to float
-        market_share = float(str(market_data['market_share']).rstrip('%')) / 100
-        market_metrics.append(market_share)
-        
-        # Convert competitors to embedding
-        competitor_count = len(market_data['competitors'])
-        market_metrics.append(competitor_count)
-        
-        # Convert target segments to embedding
-        segment_count = len(market_data['target_segments'])
-        market_metrics.append(segment_count)
-        
-        return torch.tensor(market_metrics, dtype=torch.float32)
-    
-    def process_company_data(self, file_path: str) -> Dict[str, torch.Tensor]:
-        """Process complete company data file"""
-        try:
-            # Read data file
-            with open(file_path, 'r') as f:
-                data = json.load(f)
-            
-            # Validate data
-            if not self.validate_data(data):
-                raise ValueError("Invalid data format")
-            
-            # Process each category
-            processed_data = {
-                'financial': self.process_financial_data(data['financial']),
-                'market': self.process_market_data(data['market']),
-                'operational': torch.tensor([
-                    data['operational']['employees'],
-                    len(data['operational']['locations']),
-                    float(str(data['operational']['capacity_utilization']).rstrip('%')) / 100
-                ], dtype=torch.float32),
-                'strategic': self.process_strategic_data(data['strategic'])
-            }
-            
-            return processed_data
-            
-        except Exception as e:
-            raise Exception(f"Error processing company data: {str(e)}")
-    
-    def process_strategic_data(self, strategic_data: Dict) -> torch.Tensor:
-        """Process strategic information"""
-        # Convert initiatives to count
-        initiative_count = len(strategic_data['current_initiatives'])
-        
-        # Convert challenges to count
-        challenge_count = len(strategic_data['challenges'])
-        
-        # Convert objectives to count
-        objective_count = len(strategic_data['objectives'])
-        
-        return torch.tensor([initiative_count, challenge_count, objective_count], dtype=torch.float32)
+    def process_financial_data(self, financial_data: Dict) -> Dict[str, float]:
+        """Convert financial data to a plain dict of floats."""
+        result: Dict[str, float] = {}
+        for field in self.required_fields['financial']:
+            value = financial_data.get(field, 0)
+            if isinstance(value, str):
+                try:
+                    value = float(value.replace(',', '').replace('$', ''))
+                except ValueError:
+                    value = 0.0
+            result[field] = float(value)
+        return result
+
+    def process_market_data(self, market_data: Dict) -> Dict[str, float]:
+        """Process market-related information into a plain dict."""
+        return {
+            'market_share': float(str(market_data.get('market_share', 0)).rstrip('%')) / 100,
+            'competitor_count': float(len(market_data.get('competitors', []))),
+            'segment_count': float(len(market_data.get('target_segments', []))),
+        }
+
+    def process_company_data(self, file_path: str) -> Dict[str, Dict]:
+        """Process complete company data file and return plain dicts."""
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        if not self.validate_data(data):
+            raise ValueError("Invalid data format")
+        return {
+            'financial': self.process_financial_data(data['financial']),
+            'market': self.process_market_data(data['market']),
+            'operational': {
+                'employees': float(data['operational'].get('employees', 0)),
+                'location_count': float(len(data['operational'].get('locations', []))),
+                'capacity_utilization': float(
+                    str(data['operational'].get('capacity_utilization', 0)).rstrip('%')
+                ) / 100,
+            },
+            'strategic': self.process_strategic_data(data['strategic']),
+        }
+
+    def process_strategic_data(self, strategic_data: Dict) -> Dict[str, int]:
+        """Process strategic information into plain counts."""
+        return {
+            'initiative_count': len(strategic_data.get('current_initiatives', [])),
+            'challenge_count': len(strategic_data.get('challenges', [])),
+            'objective_count': len(strategic_data.get('objectives', [])),
+        }
     
     def get_data_template(self) -> Dict:
         """Return template for required company data"""
@@ -149,11 +125,13 @@ class CompanyDataProcessor:
     def _process_single_dataset(self, data: Dict, processing_mode: str) -> Dict:
         """Process a single dataset based on processing mode"""
         try:
-            if processing_mode == "Memory Efficient":
+            if processing_mode == "Memory Efficient" and _DASK_AVAILABLE:
                 # Use Dask for memory-efficient processing
                 df = dd.from_pandas(pd.DataFrame([data]), npartitions=1)
                 processed = df.map_partitions(self._process_partition).compute()
                 return processed.to_dict('records')[0]
+            elif processing_mode == "Memory Efficient":
+                return self._standard_processing(data)
             elif processing_mode == "High Performance":
                 # Use parallel processing with larger chunks
                 return self._high_performance_processing(data)

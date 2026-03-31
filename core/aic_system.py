@@ -369,10 +369,6 @@ class ConsultingFrameworkEngine:
 # Compatibility shim
 # ---------------------------------------------------------------------------
 
-def create_aic_system():
-    """Delegate to core.engine.logic_engine.create_aic_system().
-
-    Preserves backward compatibility for callers in main.py and diagnostics.py.
-    """
-    from core.engine.logic_engine import create_aic_system as _real
-    return _real()
+def create_aic_system() -> "ConsultingFrameworkEngine":
+    """Return a ready-to-use ConsultingFrameworkEngine instance."""
+    return ConsultingFrameworkEngine()

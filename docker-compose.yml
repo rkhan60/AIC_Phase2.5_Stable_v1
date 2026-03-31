@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  aic-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./memory:/app/memory
+    environment:
+      - DB_PATH=/app/data/aic.db
+      - MEMORY_DIR=/app/memory
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  aic-streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    volumes:
+      - ./data:/app/data
+      - ./memory:/app/memory
+    environment:
+      - DB_PATH=/app/data/aic.db
+      - MEMORY_DIR=/app/memory
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    depends_on:
+      aic-api:
+        condition: service_healthy

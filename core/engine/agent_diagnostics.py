@@ -1,5 +1,3 @@
-import torch
-import torch.nn as nn
 from typing import Dict, List, Optional, Union, Any
 import time
 import inspect
@@ -7,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from .business_agents import BusinessRole, BusinessAgent, BusinessAgentManager
-from .logic_engine import ConsultingRole, AICConsultingModel
+from .logic_engine import ConsultingRole
 from .base_agent import BaseAgent, AgentAction, BusinessSummary
 from ..agents.analytics_agents import EDAVisualizer, CustomerModeler, BIEngineer
 from ..agents.data_operations_agents import DataCleaner, LabelAgent
@@ -315,10 +313,12 @@ class AgentUpdater:
         return time.time() - start_time
     
     def _measure_memory_usage(self, role) -> float:
-        """Measure agent memory usage"""
-        if torch.cuda.is_available():
-            return torch.cuda.memory_allocated() / 1024**2  # MB
-        return 0.0
+        """Measure agent memory usage (MB)."""
+        try:
+            import resource
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        except Exception:
+            return 0.0
     
     def _measure_utilization(self, role) -> float:
         """Measure agent utilization rate"""

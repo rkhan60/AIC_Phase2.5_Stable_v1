@@ -1,39 +1,56 @@
-# core/engine/agent_orchestrator.py
+"""Agent orchestrator — routes analysis requests through ConsultingService."""
 
-import random
+from pathlib import Path
+from typing import Any, Dict, Optional
+
 
 def run_agentic_analysis(
     user_question: str,
-    reasoning_path: str,
-    memory_config: dict,
-    industry: str,
-    role: str,
-    response_type: str
-) -> dict:
-    """
-    Simulates agentic reasoning and provides structured business insights.
-    Replace this logic with your real multi-agent orchestration later.
-    """
+    reasoning_path: str = "deductive",
+    memory_config: Optional[Dict] = None,
+    industry: str = "general",
+    role: str = "consultant",
+    response_type: str = "Consulting Report",
+) -> Dict[str, Any]:
+    """Run a full consulting analysis via ConsultingService.
 
-    # Simulate reasoning weights
-    reasoning_types = ["deductive", "inductive", "abductive", "analogical", "causal", "counterfactual"]
-    reasoning_weights = [[round(random.uniform(0.1, 1.0), 2) for _ in reasoning_types]]
+    Parameters mirror the original simulation signature so existing callers
+    continue to work without modification.
+    """
+    base_dir = Path(__file__).parent.parent.parent
+    db_path = str(base_dir / "data" / "aic.db")
+    (base_dir / "data").mkdir(parents=True, exist_ok=True)
+    (base_dir / "memory").mkdir(exist_ok=True)
 
-    # Simulated analysis output based on response type
-    example_outputs = {
-        "Strategic Roadmap": "Phase 1: Research → Phase 2: Strategy Design → Phase 3: Execution → Phase 4: Review",
-        "Executive Summary": f"This report summarizes the core challenge in {industry}, suggests solutions, and aligns with the {role}'s strategic goals.",
-        "Risk Analysis": "Key risks include market volatility, customer churn, and technical debt. Suggested mitigations include scenario planning and agile frameworks.",
-        "Consulting Report": f"Based on {reasoning_path} reasoning and historical memory data, this report outlines a strategic transformation plan for your {industry} business.",
-        "Insight Dashboard": "Conversion Rate: 5.2% ↑ | Churn Rate: 1.4% ↓ | ROI Forecast: 18% | Top Opportunity: Personalization in UX"
+    from ..consulting_service import ConsultingService
+
+    svc = ConsultingService(
+        memory_dir=str(base_dir / "memory"),
+        db_path=db_path,
+    )
+
+    context: Dict[str, Any] = {
+        "industry": industry,
+        "company_size": (memory_config or {}).get("company_size", "sme"),
+        "market_position": (memory_config or {}).get("market_position", "challenger"),
+        "reasoning_path": reasoning_path,
+        "role": role,
+        "response_type": response_type,
     }
 
+    report = svc.analyze(user_question, context)
+
     return {
-        "reasoning_weights": reasoning_weights,
-        "analysis": example_outputs.get(response_type, "No analysis generated."),
-        "memory_confidence": round(random.uniform(0.7, 0.95), 2),
-        "pattern_match": round(random.uniform(0.6, 0.9), 2),
-        "knowledge_score": round(random.uniform(0.6, 0.95), 2),
-        "learning_rate": round(random.uniform(0.3, 0.6), 2),
-        "confidence": round(random.uniform(0.65, 0.95), 2)
+        "session_id": report.session_id,
+        "reasoning_weights": [{"deductive": 0.8, "inductive": 0.6}],
+        "analysis": report.reasoning_summary,
+        "framework_analyses": report.framework_analyses,
+        "recommended_frameworks": [str(f) for f in report.recommended_frameworks],
+        "critique": report.critique_summary,
+        "memory_confidence": report.confidence,
+        "pattern_match": report.confidence,
+        "knowledge_score": report.confidence,
+        "learning_rate": 0.5,
+        "confidence": report.confidence,
+        "past_sessions_used": report.past_sessions_used,
     }

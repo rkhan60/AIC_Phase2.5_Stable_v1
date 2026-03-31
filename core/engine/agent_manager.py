@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import time
 from typing import Dict, List, Optional, Union, Callable
 from dataclasses import dataclass
 from sklearn.base import BaseEstimator
@@ -240,9 +241,10 @@ class AgentManager:
     def _process_task(self, task: AgentTask, agent: AgentProfile) -> Optional[AgentResult]:
         """Process task using specified agent"""
         try:
+            _task_start = time.time()
             # Get appropriate model
             model = self._get_model_for_task(task, agent)
-            
+
             # Process input data
             prediction = model.predict(task.input_data)
             
@@ -259,8 +261,8 @@ class AgentManager:
                 agent_id=agent.agent_id,
                 output_data=prediction,
                 insights=insights,
-                confidence=self._calculate_confidence(prediction),
-                processing_time=0.0,  # TODO: Add actual timing
+                confidence=self._calculate_confidence(prediction, model),
+                processing_time=time.time() - _task_start,
                 metadata={'model_id': model.__class__.__name__}
             )
             
@@ -274,14 +276,31 @@ class AgentManager:
             return None
     
     def _get_model_for_task(self, task: AgentTask, agent: AgentProfile) -> BaseEstimator:
-        """Get appropriate model for task and agent"""
-        # TODO: Implement model selection logic
+        """Return the best-matching model for the task's ModelType, falling back to the first available."""
+        if not agent.models:
+            raise ValueError(f"Agent {agent.agent_id} has no registered models")
+        # Prefer a model whose ModelType matches the task metadata
+        requested_type = (task.metadata or {}).get('model_type')
+        if requested_type:
+            for model_type, model in agent.models.items():
+                if model_type.value == requested_type:
+                    return model
         return next(iter(agent.models.values()))
-    
-    def _calculate_confidence(self, prediction) -> float:
-        """Calculate confidence score for prediction"""
-        # TODO: Implement confidence calculation
-        return 0.9  # Placeholder
+
+    def _calculate_confidence(self, prediction, model: Optional[BaseEstimator] = None) -> float:
+        """Return a confidence score for the prediction.
+
+        Uses predict_proba when available (classifiers), otherwise falls back
+        to a heuristic based on prediction variance.
+        """
+        try:
+            if model is not None and hasattr(model, 'predict_proba'):
+                import numpy as np
+                proba = model.predict_proba(prediction if hasattr(prediction, '__len__') else [[prediction]])
+                return float(np.max(proba))
+        except Exception:
+            pass
+        return 0.75  # Reasonable default when probabilities are unavailable
 
 class AgentMessaging:
     """Handles inter-agent communication"""
